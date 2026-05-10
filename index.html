@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VOID — Stream Anything. Fear Nothing.</title>
+    <meta name="description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
+    <meta name="keywords" content="movies, streaming, TV shows, watch free, VOID streaming, online movies">
+    <meta name="google-site-verification" content="cbveYvhmxDVB5olwfrJsvVln_-BSuE2oqkKhxy7QvXg" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://void-streaming.netlify.app/">
+    <meta property="og:title" content="VOID — Stream Anything. Fear Nothing.">
+    <meta property="og:description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
+    <meta property="og:image" content="https://void-streaming.netlify.app/og-image.jpg">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://void-streaming.netlify.app/">
+    <meta property="twitter:title" content="VOID — Stream Anything. Fear Nothing.">
+    <meta property="twitter:description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
+    <meta property="twitter:image" content="https://void-streaming.netlify.app/og-image.jpg">
+
+    <link rel="canonical" href="https://void-streaming.netlify.app/">
+    <meta name="theme-color" content="#030303">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="manifest" href="manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="grain-overlay" aria-hidden="true"></div>
+    <div class="toast-container" id="toastContainer" role="region" aria-label="Notifications" aria-live="polite"></div>
+
+    <!-- Profile Selector Overlay -->
+    <div class="profile-overlay" id="profileOverlay" role="dialog" aria-modal="true" aria-label="Who's watching?">
+        <div class="profile-selector">
+            <h2 class="profile-selector-title">Who's watching?</h2>
+            <div class="profile-grid" id="profileGrid"></div>
+            <button class="btn btn-outline btn-sm profile-manage-btn" id="manageProfilesBtn">MANAGE PROFILES</button>
+        </div>
+    </div>
+
+    <!-- Navbar -->
+    <nav class="navbar" id="navbar" role="navigation" aria-label="Main navigation">
+        <div class="nav-left">
+            <a href="#" class="logo" aria-label="VOID Home">
+                <img src="logo.svg" alt="VOID" height="32" class="nav-logo-img">
+            </a>
+            <ul class="nav-links" role="list">
+                <li><a href="#movies">Movies</a></li>
+                <li><a href="#tv-shows">TV Shows</a></li>
+                <li><a href="#genres">Genres</a></li>
+                <li><a href="#myWatchlistSection">Watchlist</a></li>
+                <li><a href="#collectionsSection">Collections</a></li>
+                <li><a href="#diarySection">Diary</a></li>
+            </ul>
+        </div>
+        <div class="nav-right">
+            <button class="nav-icon-btn" id="aiChatBtn" title="AI Movie Concierge" aria-label="Open AI concierge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="8" cy="10" r="1" fill="currentColor"/><circle cx="16" cy="10" r="1" fill="currentColor"/></svg>
+            </button>
+            <button class="nav-icon-btn" id="surpriseMeBtn" title="Surprise Me!" aria-label="Surprise me with a random pick">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </button>
+            <button class="nav-icon-btn theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle light/dark mode">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="themeIcon" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+            <button class="nav-icon-btn" id="shortcutsBtn" title="Keyboard shortcuts (?)" aria-label="Show keyboard shortcuts">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+            </button>
+            <div class="live-badge" aria-label="Live content available"><span class="live-indicator" aria-hidden="true"></span>LIVE</div>
+            <div class="profile-avatar-btn" id="profileAvatarBtn" title="Switch Profile" role="button" tabindex="0" aria-label="Switch profile">
+                <span class="profile-avatar-icon" id="navProfileAvatar" aria-hidden="true">👤</span>
+                <span class="profile-avatar-name" id="navProfileName">Guest</span>
+            </div>
+            <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenu"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></button>
+        </div>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div class="mobile-menu" id="mobileMenu" role="navigation" aria-label="Mobile navigation">
+        <a href="#movies">Movies</a><a href="#tv-shows">TV Shows</a><a href="#genres">Genres</a>
+        <a href="#myWatchlistSection">Watchlist</a><a href="#collectionsSection">Collections</a><a href="#diarySection">Diary</a>
+    </div>
+
+    <!-- Featured Banner -->
+    <section class="featured-banner" id="featuredBanner" aria-label="Featured content"></section>
+
+    <main id="main-content">
+
+    <!-- Search Section -->
+    <section class="search-section" id="search-section" aria-label="Search">
+        <div class="search-container" role="search">
+            <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="text" class="search-input" id="searchInput" placeholder="Search or describe what you want… (Ctrl+K)" autocomplete="off" aria-label="Search movies and shows" aria-expanded="false" aria-haspopup="listbox" aria-controls="searchResults">
+            <button class="search-clear-btn" id="searchClearBtn" style="display:none" aria-label="Clear search">✕</button>
+            <div class="search-results" id="searchResults" role="listbox" aria-label="Search results"></div>
+        </div>
+        <div class="search-filters" id="searchFilters" role="group" aria-label="Filter search results">
+            <button class="search-filter-btn active" data-filter="multi" aria-pressed="true">All</button>
+            <button class="search-filter-btn" data-filter="movie" aria-pressed="false">Movies</button>
+            <button class="search-filter-btn" data-filter="tv" aria-pressed="false">TV Shows</button>
+        </div>
+        <!-- Advanced Search Panel -->
+        <div class="advanced-search-panel" id="advancedSearchPanel" style="display:none">
+            <div class="adv-search-grid">
+                <div class="adv-search-field">
+                    <label class="adv-label">Decade</label>
+                    <div class="adv-chips" id="decadeChips">
+                        <button class="adv-chip" data-decade="">Any</button>
+                        <button class="adv-chip" data-decade="1970">70s</button>
+                        <button class="adv-chip" data-decade="1980">80s</button>
+                        <button class="adv-chip" data-decade="1990">90s</button>
+                        <button class="adv-chip" data-decade="2000">2000s</button>
+                        <button class="adv-chip" data-decade="2010">2010s</button>
+                        <button class="adv-chip" data-decade="2020">2020s</button>
+                    </div>
+                </div>
+                <div class="adv-search-field">
+                    <label class="adv-label">Runtime</label>
+                    <div class="adv-chips" id="runtimeChips">
+                        <button class="adv-chip" data-runtime="">Any</button>
+                        <button class="adv-chip" data-runtime="90">Under 90 min</button>
+                        <button class="adv-chip" data-runtime="120">Under 2 hrs</button>
+                        <button class="adv-chip" data-runtime="180">Under 3 hrs</button>
+                    </div>
+                </div>
+                <div class="adv-search-field">
+                    <label class="adv-label">Min Rating</label>
+                    <div class="adv-chips" id="ratingChips">
+                        <button class="adv-chip" data-rating="">Any</button>
+                        <button class="adv-chip" data-rating="7">7+</button>
+                        <button class="adv-chip" data-rating="8">8+</button>
+                        <button class="adv-chip" data-rating="9">9+</button>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-primary btn-sm" id="nlSearchBtn" style="margin-top:0.75rem">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 3"/></svg>
+                AI SEARCH
+            </button>
+        </div>
+        <button class="adv-search-toggle" id="advSearchToggle" aria-expanded="false" aria-controls="advancedSearchPanel">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg>
+            ADVANCED
+        </button>
+    </section>
+
+    <!-- Mood Discovery Bar -->
+    <section class="mood-bar" id="moodBar" aria-label="Mood selection">
+        <div class="mood-bar-label">I'm in the mood for...</div>
+        <div class="mood-chips" id="moodChips" role="group" aria-label="Mood options"></div>
+    </section>
+
+    <!-- Genre Bar -->
+    <section class="genre-bar" id="genres" aria-label="Browse by genre"></section>
+
+    <!-- Filter Bar -->
+    <div class="filter-bar" id="filterBar" role="group" aria-label="Content filters">
+        <select class="filter-select" id="sortSelect" aria-label="Sort by">
+            <option value="popularity.desc">Popular</option>
+            <option value="vote_average.desc">Top Rated</option>
+            <option value="release_date.desc">Newest</option>
+            <option value="original_title.asc">A-Z</option>
+        </select>
+        <select class="filter-select" id="yearFilter" aria-label="Filter by year"><option value="">Any Year</option></select>
+        <select class="filter-select" id="ratingFilter" aria-label="Filter by rating">
+            <option value="">Any Rating</option>
+            <option value="9">9+</option>
+            <option value="8">8+</option>
+            <option value="7">7+</option>
+            <option value="6">6+</option>
+        </select>
+    </div>
+
+    <!-- Continue Watching -->
+    <section class="content-section" id="continueWatchingSection" style="display:none" aria-label="Continue watching">
+        <div class="section-header"><h2 class="section-title">CONTINUE WATCHING</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="continueWatching" aria-label="Scroll left">‹</button><div class="scroll-row" id="continueWatching" role="list"></div><button class="scroll-arrow right" data-target="continueWatching" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Recently Viewed -->
+    <section class="content-section" id="recentlyViewedSection" style="display:none" aria-label="Recently viewed">
+        <div class="section-header"><h2 class="section-title">RECENTLY VIEWED</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="recentlyViewed" aria-label="Scroll left">‹</button><div class="scroll-row" id="recentlyViewed" role="list"></div><button class="scroll-arrow right" data-target="recentlyViewed" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- My Watchlist -->
+    <section class="content-section" id="myWatchlistSection" style="display:none" aria-label="My watchlist">
+        <div class="section-header">
+            <h2 class="section-title">MY WATCHLIST</h2>
+            <button class="section-link btn-ghost" id="shareWatchlistBtn" aria-label="Share watchlist">↗ Share</button>
+        </div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="myWatchlist" aria-label="Scroll left">‹</button><div class="scroll-row" id="myWatchlist" role="list"></div><button class="scroll-arrow right" data-target="myWatchlist" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- AI Recommendations -->
+    <section class="content-section" id="aiRecommendationsSection" style="display:none" aria-label="AI-powered recommendations">
+        <div class="section-header">
+            <h2 class="section-title">✨ PICKED FOR YOU</h2>
+            <button class="section-link btn-ghost" id="refreshRecsBtn" aria-label="Refresh recommendations">↻ Refresh</button>
+        </div>
+        <div class="ai-rec-reason" id="aiRecReason"></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="aiRecommendations" aria-label="Scroll left">‹</button><div class="scroll-row" id="aiRecommendations" role="list"></div><button class="scroll-arrow right" data-target="aiRecommendations" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Top 10 Today -->
+    <section class="content-section" id="top10Section" aria-label="Top 10 today">
+        <div class="section-header"><h2 class="section-title">🔥 TOP 10 TODAY</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="top10Row" aria-label="Scroll left">‹</button><div class="scroll-row top10-row" id="top10Row" role="list"></div><button class="scroll-arrow right" data-target="top10Row" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- New This Week -->
+    <section class="content-section" id="newThisWeekSection" aria-label="New this week">
+        <div class="section-header"><h2 class="section-title">🆕 NEW THIS WEEK</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="newThisWeek" aria-label="Scroll left">‹</button><div class="scroll-row" id="newThisWeek" role="list"></div><button class="scroll-arrow right" data-target="newThisWeek" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Trending Movies -->
+    <section class="content-section" id="movies" aria-label="Trending movies">
+        <div class="section-header"><h2 class="section-title">TRENDING MOVIES</h2><button class="load-more-btn" data-row="trendingMovies" data-page="2" data-endpoint="/trending/movie/week" aria-label="Load more movies">MORE</button></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="trendingMovies" aria-label="Scroll left">‹</button><div class="scroll-row" id="trendingMovies" role="list"></div><button class="scroll-arrow right" data-target="trendingMovies" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Popular TV -->
+    <section class="content-section" id="tv-shows" aria-label="Popular TV shows">
+        <div class="section-header"><h2 class="section-title">POPULAR TV SHOWS</h2><button class="load-more-btn" data-row="popularTV" data-page="2" data-endpoint="/trending/tv/week" aria-label="Load more TV shows">MORE</button></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="popularTV" aria-label="Scroll left">‹</button><div class="scroll-row" id="popularTV" role="list"></div><button class="scroll-arrow right" data-target="popularTV" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Top Rated -->
+    <section class="content-section" id="topRatedSection" aria-label="Top rated">
+        <div class="section-header"><h2 class="section-title">⭐ TOP RATED</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="topRated" aria-label="Scroll left">‹</button><div class="scroll-row" id="topRated" role="list"></div><button class="scroll-arrow right" data-target="topRated" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Now Playing -->
+    <section class="content-section" id="nowPlayingSection" aria-label="Now playing in cinemas">
+        <div class="section-header"><h2 class="section-title">🎬 IN CINEMAS NOW</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="nowPlaying" aria-label="Scroll left">‹</button><div class="scroll-row" id="nowPlaying" role="list"></div><button class="scroll-arrow right" data-target="nowPlaying" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Recommendations -->
+    <section class="content-section" id="recommendationsSection" style="display:none" aria-label="Recommended for you">
+        <div class="section-header"><h2 class="section-title">BECAUSE YOU WATCHED</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="recommendations" aria-label="Scroll left">‹</button><div class="scroll-row" id="recommendations" role="list"></div><button class="scroll-arrow right" data-target="recommendations" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Hidden Gems -->
+    <section class="content-section" id="hiddenGemsSection" aria-label="Hidden gems">
+        <div class="section-header"><h2 class="section-title">💎 HIDDEN GEMS</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="hiddenGems" aria-label="Scroll left">‹</button><div class="scroll-row" id="hiddenGems" role="list"></div><button class="scroll-arrow right" data-target="hiddenGems" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Genre Results (dynamic) -->
+    <section class="content-section" id="genreResultsSection" style="display:none" aria-label="Genre results">
+        <div class="section-header"><h2 class="section-title" id="genreResultsTitle">GENRE</h2></div>
+        <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="genreResults" aria-label="Scroll left">‹</button><div class="scroll-row" id="genreResults" role="list"></div><button class="scroll-arrow right" data-target="genreResults" aria-label="Scroll right">›</button></div>
+    </section>
+
+    <!-- Collections -->
+    <section class="content-section" id="collectionsSection" aria-label="Collections">
+        <div class="section-header">
+            <h2 class="section-title">MY COLLECTIONS</h2>
+            <button class="btn btn-outline btn-sm" id="createListBtn" aria-label="Create new collection">+ NEW LIST</button>
+        </div>
+        <div class="collections-grid" id="collectionsGrid"></div>
+        <div id="customListsContainer"></div>
+    </section>
+
+    <!-- Watch Diary -->
+    <section class="content-section" id="diarySection" aria-label="Watch diary">
+        <div class="section-header">
+            <h2 class="section-title">📖 WATCH DIARY</h2>
+            <button class="btn btn-outline btn-sm" id="exportDiaryBtn" aria-label="Export diary as CSV">↓ EXPORT</button>
+        </div>
+        <div class="diary-stats" id="diaryStats"></div>
+        <div class="diary-heatmap" id="diaryHeatmap" aria-label="Watch activity heatmap"></div>
+        <div class="diary-entries" id="diaryEntries"></div>
+    </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer" role="contentinfo">
+        <div class="footer-content">
+            <div class="footer-logo">
+                <img src="logo.svg" alt="VOID" height="24" class="footer-logo-img">
+            </div>
+            <p class="footer-text">Stream anything. Fear nothing. Powered by TMDB.</p>
+            <div class="footer-links">
+                <a href="#" aria-label="Privacy policy">Privacy</a>
+                <a href="#" aria-label="Terms of service">Terms</a>
+                <a href="mailto:contact@void-streaming.netlify.app" aria-label="Contact us">Contact</a>
+                <a href="#dmca" id="dmcaLink" aria-label="DMCA Policy">DMCA</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- DMCA Modal -->
+    <div class="shortcuts-overlay" id="dmcaModal" role="dialog" aria-modal="true" aria-labelledby="dmcaTitle">
+        <div class="shortcuts-modal" style="max-width: 700px;">
+            <h2 class="shortcuts-title" id="dmcaTitle">DMCA Policy</h2>
+            <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6; max-height: 60vh; overflow-y: auto; padding-right: 1rem;">
+                <p>VOID Streaming respects the intellectual property rights of others. In accordance with the Digital Millennium Copyright Act (DMCA), we will respond promptly to notices of alleged infringement that are reported to our designated agent.</p>
+                <br>
+                <p><strong>Notice of Infringement:</strong> If you are a copyright owner or an agent thereof and believe that any content on our site infringes upon your copyrights, you may submit a notification pursuant to the DMCA by providing our Copyright Agent with the following information in writing:</p>
+                <ul style="padding-left: 1.5rem; margin: 1rem 0;">
+                    <li>A physical or electronic signature of a person authorized to act on behalf of the owner of an exclusive right that is allegedly infringed.</li>
+                    <li>Identification of the copyrighted work claimed to have been infringed.</li>
+                    <li>Identification of the material that is claimed to be infringing or to be the subject of infringing activity and that is to be removed.</li>
+                    <li>Information reasonably sufficient to permit us to contact you, such as an address, telephone number, and email address.</li>
+                    <li>A statement that you have a good faith belief that use of the material in the manner complained of is not authorized by the copyright owner, its agent, or the law.</li>
+                    <li>A statement that the information in the notification is accurate, and under penalty of perjury, that you are authorized to act on behalf of the owner.</li>
+                </ul>
+                <p>Please send DMCA notices to: <strong>dmca@void-streaming.netlify.app</strong></p>
+            </div>
+            <button class="btn btn-primary btn-sm" style="margin-top: 1.5rem; width: 100%;" onclick="document.getElementById('dmcaModal').classList.remove('active')">CLOSE</button>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="modal-overlay" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-wrap">
+            <div class="modal-container">
+                <div class="modal-backdrop-img" id="modalBackdrop" aria-hidden="true"></div>
+                <button class="close-btn" id="closeModal" aria-label="Close details">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+                <div class="modal-hero">
+                    <div class="modal-hero-bg" id="modalHeroBg" aria-hidden="true"></div>
+                    <div class="modal-hero-gradient" aria-hidden="true"></div>
+                    <div class="modal-hero-content">
+                        <img class="modal-poster" id="modalPoster" src="" alt="">
+                        <div class="modal-hero-info">
+                            <h2 class="modal-title" id="modalTitle"></h2>
+                            <div class="modal-meta" id="modalMeta" aria-label="Movie details"></div>
+                            <div class="modal-genres" id="modalGenres" aria-label="Genres"></div>
+                            <div class="modal-actions" id="modalActions" role="group" aria-label="Actions"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-tabs" role="tablist" aria-label="Content tabs">
+                    <button class="modal-tab active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tabOverview">Overview</button>
+                    <button class="modal-tab" data-tab="cast" role="tab" aria-selected="false" aria-controls="tabCast">Cast</button>
+                    <button class="modal-tab" id="episodesTab" data-tab="episodes" role="tab" aria-selected="false" aria-controls="tabEpisodes" style="display:none">Episodes</button>
+                    <button class="modal-tab" data-tab="similar" role="tab" aria-selected="false" aria-controls="tabSimilar">Similar</button>
+                    <button class="modal-tab" data-tab="reviews" role="tab" aria-selected="false" aria-controls="tabReviews">Reviews</button>
+                </div>
+                <div class="modal-tab-content active" id="tabOverview" role="tabpanel">
+                    <p class="modal-overview" id="modalOverview"></p>
+                    <div class="modal-extra-info" id="modalExtraInfo" aria-label="Additional information"></div>
+                    <div class="add-to-list-section">
+                        <div style="position:relative;display:inline-block">
+                            <button class="btn btn-outline btn-sm" id="addToListBtn" aria-haspopup="true" aria-expanded="false">📁 ADD TO LIST</button>
+                            <div class="add-to-list-dropdown" id="addToListDropdown" style="display:none" role="menu" aria-label="Add to list options"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-tab-content" id="tabCast" role="tabpanel">
+                    <div class="cast-grid" id="castGrid" role="list"></div>
+                </div>
+                <div class="modal-tab-content" id="tabEpisodes" role="tabpanel">
+                    <div class="episode-progress-banner" id="episodeProgressBanner" style="display:none"></div>
+                    <div class="season-select-row" id="seasonPills" role="group" aria-label="Season selection"></div>
+                    <div class="episode-list" id="episodeList" role="list"></div>
+                </div>
+                <div class="modal-tab-content" id="tabSimilar" role="tabpanel">
+                    <div class="similar-grid" id="similarGrid"></div>
+                </div>
+                <div class="modal-tab-content" id="tabReviews" role="tabpanel">
+                    <div class="user-rating-section" id="userRatingSection">
+                        <h4 class="user-rating-title">YOUR RATING</h4>
+                        <div class="star-rating" id="starRating" role="group" aria-label="Star rating"></div>
+                        <textarea class="review-textarea" id="reviewTextarea" placeholder="Write your review (optional)..." rows="3" aria-label="Write a review"></textarea>
+                        <button class="btn btn-primary btn-sm" id="submitReviewBtn">SUBMIT REVIEW</button>
+                    </div>
+                    <div class="reviews-list" id="reviewsList" role="list"></div>
+                </div>
+                <div class="modal-player-section" id="playerSection" style="display:none">
+                    <div class="player-container">
+                        <iframe id="videoPlayer" allowfullscreen title="Video player" allow="autoplay; fullscreen"></iframe>
+                    </div>
+                    <div class="quality-selector" id="qualitySelector" role="group" aria-label="Video quality">
+                        <button class="quality-btn" data-q="360">360p</button>
+                        <button class="quality-btn" data-q="720">720p</button>
+                        <button class="quality-btn active" data-q="1080">1080p</button>
+                        <button class="quality-btn" data-q="4k">4K</button>
+                    </div>
+                    <!-- Next Episode Overlay -->
+                    <div class="next-ep-overlay" id="nextEpOverlay" style="display:none" aria-live="polite">
+                        <div class="next-ep-content">
+                            <p class="next-ep-label">Up Next</p>
+                            <p class="next-ep-title" id="nextEpTitle"></p>
+                            <div class="next-ep-countdown" id="nextEpCountdown">10</div>
+                            <div class="next-ep-actions">
+                                <button class="btn btn-primary btn-sm" id="nextEpPlayBtn">PLAY NOW</button>
+                                <button class="btn btn-outline btn-sm" id="nextEpCancelBtn">CANCEL</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trailer Modal -->
+    <div class="trailer-overlay" id="trailerModal" role="dialog" aria-modal="true" aria-label="Trailer">
+        <div class="trailer-container">
+            <button class="trailer-close" id="trailerClose" aria-label="Close trailer">✕</button>
+            <iframe id="trailerPlayer" allowfullscreen title="Trailer player" allow="autoplay; fullscreen"></iframe>
+        </div>
+    </div>
+
+    <!-- Mini Player -->
+    <div class="mini-player" id="miniPlayer" role="region" aria-label="Mini player">
+        <div class="mini-player-header">
+            <span class="mini-player-title" id="miniPlayerTitle"></span>
+            <div class="mini-player-actions">
+                <button class="mini-player-btn" id="miniExpand" title="Expand" aria-label="Expand player"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+                <button class="mini-player-btn" id="miniClose" title="Close" aria-label="Close mini player"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </div>
+        </div>
+        <iframe id="miniPlayerFrame" allowfullscreen title="Mini video player" allow="autoplay; fullscreen"></iframe>
+    </div>
+
+    <!-- AI Concierge Chat -->
+    <div class="ai-chat-overlay" id="aiChatOverlay" role="dialog" aria-modal="true" aria-label="AI Movie Concierge">
+        <div class="ai-chat-panel">
+            <div class="ai-chat-header">
+                <div class="ai-chat-title">
+                    <span class="ai-badge" aria-hidden="true">✨</span>
+                    AI Concierge
+                </div>
+                <button class="ai-chat-close" id="aiChatClose" aria-label="Close AI concierge">✕</button>
+            </div>
+            <div class="ai-chat-messages" id="aiChatMessages" role="log" aria-live="polite" aria-label="Conversation"></div>
+            <div class="ai-chat-suggestions" id="aiChatSuggestions" role="group" aria-label="Quick suggestions"></div>
+            <div class="ai-chat-input-row">
+                <input type="text" class="ai-chat-input" id="aiChatInput" placeholder="What should I watch tonight?" aria-label="Ask the AI concierge" autocomplete="off">
+                <button class="ai-chat-send" id="aiChatSend" aria-label="Send message">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shortcuts Modal -->
+    <div class="shortcuts-overlay" id="shortcutsModal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <div class="shortcuts-modal">
+            <h3 class="shortcuts-title">KEYBOARD SHORTCUTS</h3>
+            <div class="shortcut-row"><span class="shortcut-desc">Search</span><div class="shortcut-keys"><span class="shortcut-key">Ctrl</span><span class="shortcut-key">K</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Close</span><div class="shortcut-keys"><span class="shortcut-key">Esc</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Mini player</span><div class="shortcut-keys"><span class="shortcut-key">M</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Add to watchlist</span><div class="shortcut-keys"><span class="shortcut-key">W</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Play trailer</span><div class="shortcut-keys"><span class="shortcut-key">T</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Toggle theme</span><div class="shortcut-keys"><span class="shortcut-key">D</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Surprise Me</span><div class="shortcut-keys"><span class="shortcut-key">S</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">AI Concierge</span><div class="shortcut-keys"><span class="shortcut-key">A</span></div></div>
+            <div class="shortcut-row"><span class="shortcut-desc">Show shortcuts</span><div class="shortcut-keys"><span class="shortcut-key">?</span></div></div>
+        </div>
+    </div>
+
+    <!-- Profile Manager Modal -->
+    <div class="profile-manager-overlay" id="profileManagerModal" role="dialog" aria-modal="true" aria-label="Manage profiles">
+        <div class="profile-manager">
+            <h3 class="profile-manager-title">MANAGE PROFILES</h3>
+            <div class="profile-manager-list" id="profileManagerList" role="list"></div>
+            <div class="profile-form" id="profileForm">
+                <h4 class="profile-form-title" id="profileFormTitle">ADD PROFILE</h4>
+                <input type="text" class="profile-name-input" id="profileNameInput" placeholder="Profile name" maxlength="20" aria-label="Profile name">
+                <div class="profile-avatar-picker" id="avatarPicker" role="group" aria-label="Choose avatar"></div>
+                <div class="profile-genre-prefs">
+                    <label class="profile-genre-label">Favorite Genres</label>
+                    <div class="profile-genre-chips" id="profileGenreChips" role="group" aria-label="Genre preferences"></div>
+                </div>
+                <div class="profile-mature-toggle">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="matureToggle" aria-label="Include mature content">
+                        <span>Include mature content</span>
+                    </label>
+                </div>
+                <div class="profile-form-actions">
+                    <button class="btn btn-primary btn-sm" id="saveProfileBtn">SAVE</button>
+                    <button class="btn btn-outline btn-sm" id="cancelProfileBtn">CANCEL</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create List Modal -->
+    <div class="create-list-overlay" id="createListModal" role="dialog" aria-modal="true" aria-label="Create new list">
+        <div class="create-list-modal">
+            <h3 class="create-list-title">CREATE NEW LIST</h3>
+            <input type="text" class="list-name-input" id="listNameInput" placeholder="List name (e.g. Weekend Binge)" maxlength="40" aria-label="List name">
+            <textarea class="list-desc-input" id="listDescInput" placeholder="Description (optional)" rows="2" maxlength="120" aria-label="List description"></textarea>
+            <div class="list-form-actions">
+                <button class="btn btn-primary btn-sm" id="saveListBtn">CREATE</button>
+                <button class="btn btn-outline btn-sm" id="cancelListBtn">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Watchlist Modal -->
+    <div class="share-watchlist-overlay" id="shareWatchlistModal" role="dialog" aria-modal="true" aria-label="Share watchlist">
+        <div class="share-watchlist-modal">
+            <h3 class="share-watchlist-title">SHARE WATCHLIST</h3>
+            <p class="share-watchlist-desc">Copy this link to share your watchlist with friends:</p>
+            <div class="share-watchlist-link-row">
+                <input type="text" class="share-link-input" id="shareWatchlistLink" readonly aria-label="Share link">
+                <button class="btn btn-primary btn-sm" id="copyShareLinkBtn">COPY</button>
+            </div>
+            <button class="btn btn-outline btn-sm" id="closeShareWatchlistBtn">CLOSE</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
