@@ -1,0 +1,5 @@
+--- .gitignore (原始)
+
+
++++ .gitignore (修改后)
+Nothing needs to be added to .gitignore since the changes only include source files (.js, .html, .json) without any build artifacts, dependencies, or temporary files.

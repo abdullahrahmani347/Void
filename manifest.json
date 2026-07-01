@@ -3,9 +3,12 @@
   "short_name": "VOID",
   "description": "Stream thousands of movies and TV shows — free, instant, no sign-up.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#030303",
   "theme_color": "#E3001B",
+  "categories": ["entertainment", "movies", "tv"],
   "icons": [
     {
       "src": "favicon.svg",
@@ -18,6 +21,52 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "maskable"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
-  ]
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Browse Movies",
+      "short_name": "Movies",
+      "description": "Browse our movie collection",
+      "url": "/?section=movies",
+      "icons": [{ "src": "favicon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Browse TV Shows",
+      "short_name": "TV Shows",
+      "description": "Browse our TV show collection",
+      "url": "/?section=tv",
+      "icons": [{ "src": "favicon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "My Watchlist",
+      "short_name": "Watchlist",
+      "description": "View your watchlist",
+      "url": "/?section=watchlist",
+      "icons": [{ "src": "favicon.svg", "sizes": "any" }]
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
 }

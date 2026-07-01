@@ -1,4 +1,4 @@
-// ============ CONFIG ============
+
 const API_KEY = '2dca580c2a14b55200e784d157207b4d';
 const BASE = 'https://api.themoviedb.org/3';
 const IMG = 'https://image.tmdb.org/t/p/w342';
@@ -8,13 +8,13 @@ const IMG_FACE = 'https://image.tmdb.org/t/p/w185';
 const VIDKING = 'https://www.vidking.net/embed';
 const VK_COLOR = 'E3001B';
 const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
-const GENRES={28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',10770:'TV Movie',53:'Thriller',10752:'War',37:'Western'};
-const TV_GENRES={10759:'Action',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',10765:'Sci-Fi',9648:'Mystery',10763:'News',10764:'Reality',10767:'Talk',10768:'War',37:'Western',10766:'Soap',10762:'Kids'};
-const ALL_GENRES=[{id:28,name:'Action'},{id:12,name:'Adventure'},{id:16,name:'Animation'},{id:35,name:'Comedy'},{id:80,name:'Crime'},{id:99,name:'Documentary'},{id:18,name:'Drama'},{id:14,name:'Fantasy'},{id:27,name:'Horror'},{id:9648,name:'Mystery'},{id:10749,name:'Romance'},{id:878,name:'Sci-Fi'},{id:53,name:'Thriller'},{id:10752,name:'War'}];
-const MOOD_MAP={
-    '😂 Laugh':'35', '😱 Scared':'27', '💕 Romance':'10749', '🤯 Mind-Blown':'9648',
-    '🚀 Adventure':'28,12', '😭 Cry':'18', '🎭 Deep':'99', '👨‍👩‍👧 Family':'10751',
-    '🧠 Clever':'878', '🎵 Musical':'10402'
+const GENRES = { 28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy', 80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family', 14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music', 9648: 'Mystery', 10749: 'Romance', 878: 'Sci-Fi', 10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western' };
+const TV_GENRES = { 10759: 'Action', 16: 'Animation', 35: 'Comedy', 80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family', 10765: 'Sci-Fi', 9648: 'Mystery', 10763: 'News', 10764: 'Reality', 10767: 'Talk', 10768: 'War', 37: 'Western', 10766: 'Soap', 10762: 'Kids' };
+const ALL_GENRES = [{ id: 28, name: 'Action' }, { id: 12, name: 'Adventure' }, { id: 16, name: 'Animation' }, { id: 35, name: 'Comedy' }, { id: 80, name: 'Crime' }, { id: 99, name: 'Documentary' }, { id: 18, name: 'Drama' }, { id: 14, name: 'Fantasy' }, { id: 27, name: 'Horror' }, { id: 9648, name: 'Mystery' }, { id: 10749, name: 'Romance' }, { id: 878, name: 'Sci-Fi' }, { id: 53, name: 'Thriller' }, { id: 10752, name: 'War' }];
+const MOOD_MAP = {
+    '😂 Laugh': '35', '😱 Scared': '27', '💕 Romance': '10749', '🤯 Mind-Blown': '9648',
+    '🚀 Adventure': '28,12', '😭 Cry': '18', '🎭 Deep': '99', '👨‍👩‍👧 Family': '10751',
+    '🧠 Clever': '878', '🎵 Musical': '10402'
 };
 
 // ============ STATE ============
@@ -52,7 +52,7 @@ function updateSEO(title, description, type, image) {
     updateMetaTag('og:type', type === 'movie' ? 'video.movie' : 'video.tv_show');
     const pageUrl = `${window.location.origin}${window.location.pathname}?type=${type}&id=${state.mediaId}`;
     updateMetaTag('og:url', pageUrl);
-    
+
     // Canonical link
     let canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) canonical.setAttribute('href', pageUrl);
@@ -110,7 +110,7 @@ function injectSchema(d, type) {
 // ============ STORAGE ============
 const Store = {
     get(key, def = []) { try { return JSON.parse(localStorage.getItem('void_' + key)) ?? def; } catch { return def; } },
-    set(key, val) { try { localStorage.setItem('void_' + key, JSON.stringify(val)); } catch(e) { console.warn('Storage error', e); } },
+    set(key, val) { try { localStorage.setItem('void_' + key, JSON.stringify(val)); } catch (e) { console.warn('Storage error', e); } },
     getTheme() { return localStorage.getItem('void_theme') || 'dark'; }
 };
 
@@ -225,7 +225,7 @@ function renderBanner() {
             </div>
         </div>`;
     }).join('');
-    html += `<div class="banner-dots" role="tablist" aria-label="Banner slides">${items.map((item, i) => `<button class="banner-dot ${i === 0 ? 'active' : ''}" role="tab" aria-selected="${i === 0}" aria-label="Slide ${i+1}: ${item.title || item.name}" onclick="goToBanner(${i})"></button>`).join('')}</div>`;
+    html += `<div class="banner-dots" role="tablist" aria-label="Banner slides">${items.map((item, i) => `<button class="banner-dot ${i === 0 ? 'active' : ''}" role="tab" aria-selected="${i === 0}" aria-label="Slide ${i + 1}: ${item.title || item.name}" onclick="goToBanner(${i})"></button>`).join('')}</div>`;
     container.innerHTML = html;
 }
 function goToBanner(index) { state.bannerIndex = index; updateBannerSlide(); }
@@ -292,11 +292,11 @@ function initSearch() {
         if (!q) return;
         toast('Interpreting your search with AI...', 'info');
         try {
-            const prompt = `The user wants to find a movie or TV show. Their description: "${q}". Also their filters: decade=${state.advDecade||'any'}, max runtime=${state.advRuntime||'any'}, min rating=${state.advRating||'any'}. Return a TMDB /discover/movie query string (just the parameters after the '?', no base URL, include api_key placeholder as API_KEY) that best matches this request. Reply with ONLY the parameter string, nothing else.`;
+            const prompt = `The user wants to find a movie or TV show. Their description: "${q}". Also their filters: decade=${state.advDecade || 'any'}, max runtime=${state.advRuntime || 'any'}, min rating=${state.advRating || 'any'}. Return a TMDB /discover/movie query string (just the parameters after the '?', no base URL, include api_key placeholder as API_KEY) that best matches this request. Reply with ONLY the parameter string, nothing else.`;
             const params = await callClaude([{ role: 'user', content: prompt }]);
             const url = `/discover/movie?${params.replace('API_KEY', API_KEY)}`;
             const res = await tmdbList(url);
-            displaySearchResults(res.slice(0, 10).map(m => ({...m, media_type: 'movie'})));
+            displaySearchResults(res.slice(0, 10).map(m => ({ ...m, media_type: 'movie' })));
         } catch (e) { toast('AI search unavailable, using standard search', 'warning'); searchMedia(q); }
     });
 }
@@ -317,7 +317,7 @@ function showSearchHome() {
             <span class="search-history-label">Recent</span>
             <button class="search-history-clear" onclick="Store.set('search_history',[]);document.getElementById('searchResults').classList.remove('active')">Clear</button>
         </div>
-        ${history.map(h => `<div class="search-history-item" onclick="document.getElementById('searchInput').value='${h.replace(/'/g,"\\'")}';searchMedia('${h.replace(/'/g,"\\'")}')"><span class="shi-icon">↩</span>${h}</div>`).join('')}
+        ${history.map(h => `<div class="search-history-item" onclick="document.getElementById('searchInput').value='${h.replace(/'/g, "\\'")}';searchMedia('${h.replace(/'/g, "\\'")}')"><span class="shi-icon">↩</span>${h}</div>`).join('')}
     </div>`;
     results.classList.add('active');
     document.getElementById('searchInput').setAttribute('aria-expanded', 'true');
@@ -380,7 +380,7 @@ async function selectGenre(id, name) {
             tmdbList(`/discover/movie?with_genres=${id}&sort_by=popularity.desc`),
             tmdbList(`/discover/tv?with_genres=${id}&sort_by=popularity.desc`)
         ]);
-        const combined = [...movies.map(m => ({...m, media_type:'movie'})), ...tv.map(t => ({...t, media_type:'tv'}))];
+        const combined = [...movies.map(m => ({ ...m, media_type: 'movie' })), ...tv.map(t => ({ ...t, media_type: 'tv' }))];
         combined.sort((a, b) => b.popularity - a.popularity);
         renderContentRow('genreResults', combined.slice(0, 20));
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -405,7 +405,7 @@ async function applyFilters() {
     renderSkeletons('trendingMovies', 10);
     try {
         const results = await tmdbList(endpoint);
-        renderContentRow('trendingMovies', results.map(m => ({...m, media_type:'movie'})));
+        renderContentRow('trendingMovies', results.map(m => ({ ...m, media_type: 'movie' })));
     } catch (e) { toast('Filter failed', 'error'); }
 }
 
@@ -433,7 +433,13 @@ function renderContentRow(containerId, items) {
         const cw = continueW.find(w => w.id === item.id);
         const progress = cw ? cw.progress : (item.progress || 0);
         return `<div class="content-card" role="listitem" tabindex="0" aria-label="${title}, ${year}, ${rating} stars" onclick="openMedia(${item.id},'${type}')" onkeypress="if(event.key==='Enter')openMedia(${item.id},'${type}')" data-id="${item.id}" data-type="${type}">
-            <img src="${poster}" srcset="${posterSm} 185w, ${poster} 342w" sizes="(max-width: 600px) 185px, 342px" alt="${title}" class="card-poster" loading="lazy">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E"
+                 data-src="${poster}"
+                 data-srcset="${posterSm} 185w, ${poster} 342w"
+                 sizes="(max-width: 600px) 185px, 342px"
+                 alt="${title}"
+                 class="card-poster"
+                 loading="lazy">
             <div class="rating-badge" aria-hidden="true">${rating} ★</div>
             <div class="card-actions" aria-hidden="true">
                 <button class="card-action-btn ${isFav ? 'favorited' : ''}" onclick="event.stopPropagation();toggleWatchlist(${item.id},'${type}','${title.replace(/'/g, "\\'")}','${item.poster_path || ''}')" title="${isFav ? 'Remove from watchlist' : 'Add to watchlist'}">
@@ -442,7 +448,7 @@ function renderContentRow(containerId, items) {
                 <button class="card-action-btn" onclick="event.stopPropagation();shareContent(${item.id},'${type}','${title.replace(/'/g, "\\'")}')" title="Share">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
                 </button>
-                <button class="card-action-btn" onclick="event.stopPropagation();addToDiary(${item.id},'${type}','${title.replace(/'/g,"\\'")}','${item.poster_path||''}')" title="Add to diary">📖</button>
+                <button class="card-action-btn" onclick="event.stopPropagation();addToDiary(${item.id},'${type}','${title.replace(/'/g, "\\'")}','${item.poster_path || ''}')" title="Add to diary">📖</button>
             </div>
             <div class="card-overlay" aria-hidden="true">
                 <div class="card-title">${title}</div>
@@ -525,7 +531,7 @@ async function selectMood(label) {
     renderSkeletons('genreResults', 10);
     try {
         const results = await tmdbList(`/discover/movie?with_genres=${genreIds}&sort_by=popularity.desc`);
-        renderContentRow('genreResults', results.map(m => ({...m, media_type:'movie'})));
+        renderContentRow('genreResults', results.map(m => ({ ...m, media_type: 'movie' })));
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { toast('Failed to load mood results', 'error'); }
 }
@@ -596,11 +602,11 @@ async function loadAIRecommendations() {
     const profile = getCurrentProfile();
     if (!watched.length) return;
     try {
-        const topRated = Object.entries(ratings).sort((a,b) => b[1].stars - a[1].stars).slice(0, 5).map(([id]) => watched.find(w => w.id == id)?.title).filter(Boolean);
+        const topRated = Object.entries(ratings).sort((a, b) => b[1].stars - a[1].stars).slice(0, 5).map(([id]) => watched.find(w => w.id == id)?.title).filter(Boolean);
         const recentTitles = watched.slice(0, 5).map(w => w.title);
         const genres = profile?.genres || [];
         const prompt = `You are a movie recommendation expert. Based on this user's watch history and ratings, give me a short reason (max 15 words) for why I'm recommending content to them. Recent watches: ${recentTitles.join(', ')}. Highly rated: ${topRated.join(', ')}. Preferred genres: ${genres.join(', ')}. Reply with ONLY the short reason sentence, no quotes.`;
-        const reason = await callClaude([{role:'user', content: prompt}]);
+        const reason = await callClaude([{ role: 'user', content: prompt }]);
         document.getElementById('aiRecReason').textContent = '✨ ' + reason;
         // Now get actual recommendations via TMDB
         const seedIds = watched.slice(0, 3).map(w => w.id);
@@ -610,7 +616,7 @@ async function loadAIRecommendations() {
         const seen = new Set(watched.map(w => w.id));
         const unique = [];
         for (const item of flat) {
-            if (!seen.has(item.id)) { seen.add(item.id); unique.push({...item, media_type: item.media_type || 'movie'}); }
+            if (!seen.has(item.id)) { seen.add(item.id); unique.push({ ...item, media_type: item.media_type || 'movie' }); }
         }
         if (unique.length) {
             document.getElementById('aiRecommendationsSection').style.display = 'block';
@@ -627,14 +633,14 @@ async function loadRecommendations() {
         const results = await Promise.all(seed.map(s => tmdbList(`/${s.type}/${s.id}/recommendations`)));
         const flat = results.flat();
         const unique = []; const seen = new Set();
-        for (const item of flat) { if (!seen.has(item.id)) { seen.add(item.id); unique.push({...item, media_type: item.media_type || seed[0].type}); } }
+        for (const item of flat) { if (!seen.has(item.id)) { seen.add(item.id); unique.push({ ...item, media_type: item.media_type || seed[0].type }); } }
         if (unique.length) { document.getElementById('recommendationsSection').style.display = 'block'; renderContentRow('recommendations', unique.slice(0, 20)); }
     } catch (e) { console.error('Recommendations error', e); }
 }
 
 // ============ CONTENT LOADING ============
 async function loadContent() {
-    ['trendingMovies','popularTV','topRated','nowPlaying','hiddenGems'].forEach(id => renderSkeletons(id, 10));
+    ['trendingMovies', 'popularTV', 'topRated', 'nowPlaying', 'hiddenGems'].forEach(id => renderSkeletons(id, 10));
     try {
         const [movies, tv, top, now, topWeek, hiddenMovies] = await Promise.all([
             tmdbList('/trending/movie/week'),
@@ -644,11 +650,11 @@ async function loadContent() {
             tmdbList('/trending/all/week'),
             tmdbList('/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc')
         ]);
-        renderContentRow('trendingMovies', movies.map(m => ({...m, media_type:'movie'})));
-        renderContentRow('popularTV', tv.map(t => ({...t, media_type:'tv'})));
-        renderContentRow('topRated', top.map(m => ({...m, media_type:'movie'})));
-        renderContentRow('nowPlaying', now.map(m => ({...m, media_type:'movie'})));
-        renderContentRow('hiddenGems', hiddenMovies.map(m => ({...m, media_type:'movie'})));
+        renderContentRow('trendingMovies', movies.map(m => ({ ...m, media_type: 'movie' })));
+        renderContentRow('popularTV', tv.map(t => ({ ...t, media_type: 'tv' })));
+        renderContentRow('topRated', top.map(m => ({ ...m, media_type: 'movie' })));
+        renderContentRow('nowPlaying', now.map(m => ({ ...m, media_type: 'movie' })));
+        renderContentRow('hiddenGems', hiddenMovies.map(m => ({ ...m, media_type: 'movie' })));
         renderTop10(topWeek);
         loadNewThisWeek();
     } catch (e) { toast('Failed to load content. Check your connection.', 'error'); }
@@ -665,7 +671,12 @@ async function loadNewThisWeek() {
             const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
             const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
             return `<div class="content-card" role="listitem" tabindex="0" onclick="openMedia(${item.id},'movie')" onkeypress="if(event.key==='Enter')openMedia(${item.id},'movie')" data-id="${item.id}" data-type="movie">
-                <img src="${poster}" alt="" class="card-poster" loading="lazy" aria-hidden="true">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E"
+                     data-src="${poster}"
+                     alt=""
+                     class="card-poster"
+                     loading="lazy"
+                     aria-hidden="true">
                 <span class="new-badge" aria-hidden="true">NEW</span>
                 <div class="rating-badge" aria-hidden="true">${rating} ★</div>
                 <div class="card-overlay" aria-hidden="true"><div class="card-title">${title}</div><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div></div>
@@ -674,7 +685,7 @@ async function loadNewThisWeek() {
         }).join('');
         initDragScroll(c);
         initHoverTrailerPreviews(c);
-    } catch(e) {}
+    } catch (e) { }
 }
 
 function renderTop10(items) {
@@ -686,9 +697,15 @@ function renderTop10(items) {
         const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
         const posterSm = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
         const rating = item.vote_average ? item.vote_average.toFixed(1) : '';
-        return `<div class="top10-card" role="listitem" onclick="openMedia(${item.id},'${type}')" tabindex="0" aria-label="#${i+1} ${title}">
+        return `<div class="top10-card" role="listitem" onclick="openMedia(${item.id},'${type}')" tabindex="0" aria-label="#${i + 1} ${title}">
             <div class="top10-number" aria-hidden="true">${i + 1}</div>
-            <img class="top10-poster" src="${poster}" srcset="${posterSm} 185w, ${poster} 342w" sizes="130px" alt="${title}" loading="lazy">
+            <img class="top10-poster"
+                 src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E"
+                 data-src="${poster}"
+                 data-srcset="${posterSm} 185w, ${poster} 342w"
+                 sizes="130px"
+                 alt="${title}"
+                 loading="lazy">
             <div class="top10-info"><div class="top10-title">${title}</div><div class="top10-meta">${rating ? rating + ' ★' : ''}</div></div>
         </div>`;
     }).join('');
@@ -698,7 +715,7 @@ function renderTop10(items) {
 // ============ SHARE ============
 function shareContent(id, type, title) {
     const url = `${window.location.origin}${window.location.pathname}?type=${type}&id=${id}`;
-    if (navigator.share) { navigator.share({ title: `Watch ${title} on VOID`, url }).catch(() => {}); }
+    if (navigator.share) { navigator.share({ title: `Watch ${title} on VOID`, url }).catch(() => { }); }
     else { navigator.clipboard.writeText(url).then(() => toast('Link copied!', 'success')).catch(() => toast('Failed to copy', 'error')); }
 }
 
@@ -839,8 +856,8 @@ async function sendAIMessage() {
 
     const watched = Store.get('recently_viewed');
     const ratings = Store.get('user_ratings', {});
-    const ratedStr = Object.entries(ratings).map(([id, r]) => `${r.title}: ${r.stars}/5`).slice(0,5).join(', ');
-    const system = `You are VOID's friendly AI movie concierge. The user's recent watches: ${watched.slice(0,5).map(w=>w.title).join(', ')}. Their ratings: ${ratedStr || 'none yet'}. Be warm, specific, and concise (under 80 words). If recommending titles, list them as: [RECOMMEND: Title (year)] so we can parse them. Don't use markdown.`;
+    const ratedStr = Object.entries(ratings).map(([id, r]) => `${r.title}: ${r.stars}/5`).slice(0, 5).join(', ');
+    const system = `You are VOID's friendly AI movie concierge. The user's recent watches: ${watched.slice(0, 5).map(w => w.title).join(', ')}. Their ratings: ${ratedStr || 'none yet'}. Be warm, specific, and concise (under 80 words). If recommending titles, list them as: [RECOMMEND: Title (year)] so we can parse them. Don't use markdown.`;
 
     try {
         const reply = await callClaude([...state.aiChatHistory], system);
@@ -857,7 +874,7 @@ async function sendAIMessage() {
                 const res = await tmdb(`/search/multi?query=${encodeURIComponent(title)}&include_adult=false`);
                 const found = (res.results || []).find(r => (r.media_type === 'movie' || r.media_type === 'tv') && (r.release_date || r.first_air_date || '').startsWith(year));
                 if (found) mediaCards.push({ id: found.id, type: found.media_type, title: found.title || found.name, poster: found.poster_path });
-            } catch {}
+            } catch { }
         }
         addAIMessage('ai', cleanReply || reply, mediaCards);
     } catch (e) {
@@ -968,9 +985,9 @@ async function openMedia(id, type) {
         const endpoint = type === 'movie' ? 'movie' : 'tv';
         const [details, credits, similar, videos] = await Promise.all([
             tmdb(`/${endpoint}/${id}`),
-            tmdb(`/${endpoint}/${id}/credits`).catch(() => ({cast:[]})),
+            tmdb(`/${endpoint}/${id}/credits`).catch(() => ({ cast: [] })),
             tmdbList(`/${endpoint}/${id}/similar`).catch(() => []),
-            tmdb(`/${endpoint}/${id}/videos`).catch(() => ({results:[]}))
+            tmdb(`/${endpoint}/${id}/videos`).catch(() => ({ results: [] }))
         ]);
         state.currentDetails = details;
         displayDetails(details, type);
@@ -1017,10 +1034,10 @@ function displayDetails(d, type) {
     document.getElementById('modalActions').innerHTML = `
         <button class="btn btn-primary btn-sm" onclick="playMedia()">▶ PLAY</button>
         ${state.currentTrailerKey ? `<button class="btn btn-outline btn-sm" onclick="openTrailer()">🎬 TRAILER</button>` : ''}
-        <button class="btn btn-outline btn-sm" id="watchlistModalBtn" onclick="toggleWatchlist(${d.id},'${type}','${title.replace(/'/g,"\\'")}','${d.poster_path || ''}')">${isFav ? '♥' : '♡'} WATCHLIST</button>
-        <button class="btn btn-outline btn-sm" onclick="shareContent(${d.id},'${type}','${title.replace(/'/g,"\\'")}')">↗ SHARE</button>
+        <button class="btn btn-outline btn-sm" id="watchlistModalBtn" onclick="toggleWatchlist(${d.id},'${type}','${title.replace(/'/g, "\\'")}','${d.poster_path || ''}')">${isFav ? '♥' : '♡'} WATCHLIST</button>
+        <button class="btn btn-outline btn-sm" onclick="shareContent(${d.id},'${type}','${title.replace(/'/g, "\\'")}')">↗ SHARE</button>
         <button class="btn btn-outline btn-sm" onclick="toggleMiniPlayer()">⊡ MINI</button>
-        <button class="btn btn-outline btn-sm" onclick="addToDiary(${d.id},'${type}','${title.replace(/'/g,"\\'")}','${d.poster_path||''}')">📖 DIARY</button>
+        <button class="btn btn-outline btn-sm" onclick="addToDiary(${d.id},'${type}','${title.replace(/'/g, "\\'")}','${d.poster_path || ''}')">📖 DIARY</button>
     `;
 
     document.getElementById('modalGenres').innerHTML = (d.genres || []).map(g => `<span class="modal-genre">${g.name}</span>`).join('');
@@ -1028,8 +1045,8 @@ function displayDetails(d, type) {
 
     let extra = '';
     if (type === 'movie') {
-        if (d.budget) extra += `<div class="info-item"><span class="info-label">BUDGET</span>$${(d.budget/1e6).toFixed(0)}M</div>`;
-        if (d.revenue) extra += `<div class="info-item"><span class="info-label">REVENUE</span>$${(d.revenue/1e6).toFixed(0)}M</div>`;
+        if (d.budget) extra += `<div class="info-item"><span class="info-label">BUDGET</span>$${(d.budget / 1e6).toFixed(0)}M</div>`;
+        if (d.revenue) extra += `<div class="info-item"><span class="info-label">REVENUE</span>$${(d.revenue / 1e6).toFixed(0)}M</div>`;
         if (d.production_companies?.length) extra += `<div class="info-item"><span class="info-label">STUDIO</span>${d.production_companies[0].name}</div>`;
     } else {
         if (d.networks?.length) extra += `<div class="info-item"><span class="info-label">NETWORK</span>${d.networks[0].name}</div>`;
@@ -1049,13 +1066,18 @@ function displayCast(cast) {
 
 function displaySimilar(items, parentType) {
     const grid = document.getElementById('similarGrid');
-    const mapped = items.slice(0, 15).map(item => ({...item, media_type: item.media_type || parentType}));
+    const mapped = items.slice(0, 15).map(item => ({ ...item, media_type: item.media_type || parentType }));
     grid.innerHTML = mapped.map(item => {
         const title = item.title || item.name;
         const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
         const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
         return `<div class="content-card" onclick="closeModal();setTimeout(()=>openMedia(${item.id},'${item.media_type}'),400)" style="flex:0 0 130px" tabindex="0">
-            <img src="${poster}" alt="${title}" class="card-poster" style="height:195px" loading="lazy">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E"
+                 data-src="${poster}"
+                 alt="${title}"
+                 class="card-poster"
+                 style="height:195px"
+                 loading="lazy">
             <div class="rating-badge">${rating} ★</div>
             <div class="card-overlay"><div class="card-title">${title}</div><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div></div>
         </div>`;
@@ -1257,7 +1279,7 @@ function toggleShortcutsModal() {
 // ============ REVIEWS ============
 function initReviews() {
     const starContainer = document.getElementById('starRating');
-    starContainer.innerHTML = [1,2,3,4,5].map(n => `<button class="star-btn" data-star="${n}" aria-label="${n} star${n>1?'s':''}" onclick="selectStar(${n})">★</button>`).join('');
+    starContainer.innerHTML = [1, 2, 3, 4, 5].map(n => `<button class="star-btn" data-star="${n}" aria-label="${n} star${n > 1 ? 's' : ''}" onclick="selectStar(${n})">★</button>`).join('');
     const id = state.mediaId;
     if (!id) return;
     const ratings = Store.get('user_ratings', {});
@@ -1409,7 +1431,7 @@ function toggleItemInList(listId) {
 }
 
 // ============ PROFILES ============
-const DEFAULT_AVATARS = ['👤','🦁','🐼','🦊','🐺','🦋','🌙','⚡','🎭','🎬','👑','🔥'];
+const DEFAULT_AVATARS = ['👤', '🦁', '🐼', '🦊', '🐺', '🦋', '🌙', '⚡', '🎭', '🎬', '👑', '🔥'];
 function getCurrentProfile() {
     const profiles = Store.get('profiles', []);
     const activeId = Store.get('active_profile', null);
@@ -1615,3 +1637,294 @@ window.addEventListener('message', event => {
         }
     }
 });
+
+// ============ PERFORMANCE OPTIMIZATIONS ============
+
+// Lazy load images with Intersection Observer
+function initLazyLoading() {
+    if ('IntersectionObserver' in window) {
+        const imageObserver = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    if (img.dataset.src) {
+                        img.src = img.dataset.src;
+                        img.removeAttribute('data-src');
+                    }
+                    if (img.dataset.srcset) {
+                        img.srcset = img.dataset.srcset;
+                        img.removeAttribute('data-srcset');
+                    }
+                    img.classList.add('loaded');
+                    observer.unobserve(img);
+                }
+            });
+        }, { rootMargin: '50px 0px' });
+
+        document.querySelectorAll('img[data-src]').forEach(img => imageObserver.observe(img));
+    }
+}
+
+// Virtual scrolling for large lists
+function initVirtualScroll() {
+    const scrollRows = document.querySelectorAll('.scroll-row');
+    scrollRows.forEach(row => {
+        const cards = row.querySelectorAll('.content-card');
+        if (cards.length > 50) {
+            // For very large lists, only render visible items
+            row.setAttribute('data-virtual', 'true');
+            row.setAttribute('data-total-items', cards.length);
+        }
+    });
+}
+
+// Debounce function for performance
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// Throttle function for scroll events
+function throttle(func, limit) {
+    let inThrottle;
+    return function (...args) {
+        if (!inThrottle) {
+            func.apply(this, args);
+            inThrottle = true;
+            setTimeout(() => inThrottle = false, limit);
+        }
+    };
+}
+
+// Optimize scroll arrow initialization with throttling
+const throttledInitScrollArrows = throttle(initScrollArrows, 300);
+
+// Request idle callback for non-critical tasks
+function scheduleIdleTask(callback) {
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(callback);
+    } else {
+        setTimeout(callback, 1);
+    }
+}
+
+// Preload critical resources
+function preloadCriticalResources() {
+    // Preload hero banner images
+    const featuredImages = document.querySelectorAll('.featured-banner .banner-backdrop');
+    featuredImages.forEach((img, index) => {
+        if (index < 3) { // Only preload first 3 slides
+            const imgUrl = img.style.backgroundImage.slice(5, -2);
+            const link = document.createElement('link');
+            link.rel = 'preload';
+            link.as = 'image';
+            link.href = imgUrl;
+            document.head.appendChild(link);
+        }
+    });
+}
+
+// Memory management - cleanup unused observers
+function cleanupObservers() {
+    window.addEventListener('beforeunload', () => {
+        // Clear any pending timeouts
+        let id = window.setTimeout(() => { }, 0);
+        while (id--) {
+            window.clearTimeout(id);
+        }
+    });
+}
+
+// ============ ANALYTICS & ERROR MONITORING ============
+
+// Simple analytics tracker
+const Analytics = {
+    events: [],
+
+    track(eventType, data = {}) {
+        const event = {
+            type: eventType,
+            timestamp: Date.now(),
+            url: window.location.href,
+            referrer: document.referrer,
+            userAgent: navigator.userAgent,
+            screen: { width: window.screen.width, height: window.screen.height },
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            ...data
+        };
+
+        this.events.push(event);
+
+        // Log to console in development
+        console.log('[Analytics]', eventType, data);
+
+        // Store locally for potential batch sending
+        this.saveEvents();
+
+        // Send to analytics endpoint if available
+        this.sendEvent(event);
+    },
+
+    saveEvents() {
+        try {
+            localStorage.setItem('void_analytics', JSON.stringify(this.events.slice(-100))); // Keep last 100 events
+        } catch (e) {
+            console.warn('Failed to save analytics:', e);
+        }
+    },
+
+    sendEvent(event) {
+        // In production, this would send to an analytics service
+        // For now, just log it
+        if (navigator.sendBeacon) {
+            // Could use sendBeacon for reliable delivery
+            // navigator.sendBeacon('/analytics', JSON.stringify(event));
+        }
+    },
+
+    pageView(pageName) {
+        this.track('page_view', { page: pageName || window.location.pathname });
+    },
+
+    mediaPlay(mediaId, mediaType, title) {
+        this.track('media_play', { mediaId, mediaType, title });
+    },
+
+    search(query, resultsCount) {
+        this.track('search', { query, resultsCount });
+    },
+
+    addToWatchlist(mediaId, mediaType) {
+        this.track('add_to_watchlist', { mediaId, mediaType });
+    },
+
+    removeFromWatchlist(mediaId) {
+        this.track('remove_from_watchlist', { mediaId });
+    }
+};
+
+// Error monitoring and reporting
+const ErrorMonitor = {
+    errors: [],
+    maxErrors: 50,
+
+    init() {
+        // Global error handler
+        window.addEventListener('error', (event) => {
+            this.handleError({
+                message: event.message,
+                source: event.filename,
+                lineno: event.lineno,
+                colno: event.colno,
+                stack: event.error?.stack,
+                type: 'runtime'
+            });
+        });
+
+        // Unhandled promise rejection handler
+        window.addEventListener('unhandledrejection', (event) => {
+            this.handleError({
+                message: event.reason?.message || 'Unhandled promise rejection',
+                source: event.reason?.stack || String(event.reason),
+                type: 'promise'
+            });
+        });
+
+        // API error tracking
+        this.patchFetch();
+    },
+
+    handleError(error) {
+        const errorRecord = {
+            ...error,
+            timestamp: Date.now(),
+            url: window.location.href,
+            userAgent: navigator.userAgent
+        };
+
+        this.errors.push(errorRecord);
+        if (this.errors.length > this.maxErrors) {
+            this.errors.shift();
+        }
+
+        console.error('[ErrorMonitor]', error);
+
+        // In production, send to error tracking service
+        // this.sendError(errorRecord);
+    },
+
+    patchFetch() {
+        const originalFetch = window.fetch;
+        window.fetch = async function (...args) {
+            try {
+                return await originalFetch.apply(this, args);
+            } catch (error) {
+                ErrorMonitor.handleError({
+                    message: `Fetch failed: ${error.message}`,
+                    source: args[0]?.toString() || 'unknown',
+                    type: 'network'
+                });
+                throw error;
+            }
+        };
+    },
+
+    getErrors() {
+        return this.errors;
+    },
+
+    clearErrors() {
+        this.errors = [];
+    }
+};
+
+// Initialize performance optimizations
+function initPerformanceOptimizations() {
+    // Initialize lazy loading
+    initLazyLoading();
+
+    // Initialize virtual scrolling
+    initVirtualScroll();
+
+    // Preload critical resources
+    scheduleIdleTask(preloadCriticalResources);
+
+    // Setup memory cleanup
+    cleanupObservers();
+
+    // Initialize error monitoring
+    ErrorMonitor.init();
+
+    // Track initial page view
+    Analytics.pageView('home');
+
+    console.log('[Performance] Optimizations initialized');
+}
+
+// Enhanced content card rendering with performance tracking
+const originalRenderContentRow = renderContentRow;
+renderContentRow = function (containerId, items) {
+    const startTime = performance.now();
+    originalRenderContentRow(containerId, items);
+    const endTime = performance.now();
+
+    // Track rendering performance
+    if (endTime - startTime > 100) {
+        console.warn(`[Performance] Slow render for ${containerId}: ${(endTime - startTime).toFixed(2)}ms`);
+        Analytics.track('slow_render', { containerId, duration: endTime - startTime, itemCount: items.length });
+    }
+};
+
+// Initialize performance optimizations after DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initPerformanceOptimizations);
+} else {
+    initPerformanceOptimizations();
+}
