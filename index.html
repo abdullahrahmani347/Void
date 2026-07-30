@@ -24,9 +24,9 @@
     <meta property="twitter:image" content="https://void-streaming.netlify.app/og-image.jpg">
 
     <link rel="canonical" href="https://void-streaming.netlify.app/">
-    <meta name="theme-color" content="#030303">
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#E3001B">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <link rel="manifest" href="manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -711,52 +711,20 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="a11y.js"></script>
+    <script src="resume-dialog.js"></script>
+    <script src="share-card.js"></script>
+    <script src="watchlist-share.js"></script>
+    <script src="command-palette.js"></script>
+    <script src="diary-depth.js"></script>
+    <script src="genre-mashup.js"></script>
+    <script src="profile-pin.js"></script>
+    <script src="i18n.js"></script>
+    <script src="csv-import.js"></script>
     <script>
-        // Register Service Worker for offline functionality
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js')
-                    .then((registration) => {
-                        console.log('[SW] Service Worker registered successfully:', registration.scope);
-
-                        // Check for updates
-                        registration.addEventListener('updatefound', () => {
-                            const newWorker = registration.installing;
-                            console.log('[SW] New service worker installing...');
-
-                            newWorker.addEventListener('statechange', () => {
-                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                    // New content available
-                                    console.log('[SW] New content available, please refresh.');
-                                    toast('New version available! Refresh to update.', 'info');
-                                }
-                            });
-                        });
-                    })
-                    .catch((error) => {
-                        console.error('[SW] Service Worker registration failed:', error);
-                    });
-
-                // Listen for online/offline status
-                window.addEventListener('online', () => {
-                    console.log('[App] Back online!');
-                    toast('Back online! Syncing...', 'success');
-
-                    // Trigger background sync if supported
-                    if ('serviceWorker' in navigator && 'sync' in window.SyncManager.prototype) {
-                        navigator.serviceWorker.ready.then((registration) => {
-                            registration.sync.register('sync-watchlist');
-                            registration.sync.register('sync-diary');
-                        }).catch(console.error);
-                    }
-                });
-
-                window.addEventListener('offline', () => {
-                    console.log('[App] Went offline');
-                    toast('You are offline. Some features may be limited.', 'warning');
-                });
-            });
-        }
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+      }
     </script>
 </body>
 

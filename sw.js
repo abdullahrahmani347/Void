@@ -4,6 +4,8 @@
 const CACHE_NAME = 'void-cache-v1';
 const STATIC_CACHE = 'void-static-v1';
 const DYNAMIC_CACHE = 'void-dynamic-v1';
+const CACHE = 'void-v1';
+const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/logo.svg', '/favicon.svg', '/manifest.webmanifest'];
 
 // Assets to cache immediately on install
 const STATIC_ASSETS = [
@@ -11,7 +13,7 @@ const STATIC_ASSETS = [
   '/index.html',
   '/app.js',
   '/styles.css',
-  '/manifest.json',
+  '/manifest.webmanifest',
   '/favicon.svg',
   '/logo.svg',
   '/robots.txt',
@@ -23,14 +25,17 @@ const IMAGE_DOMAINS = [
   'https://image.tmdb.org'
 ];
 
-// Install event - cache static assets
+// Install event - cache static assets + shell (P2 offline shell)
 self.addEventListener('install', (event) => {
   console.log('[ServiceWorker] Install');
   event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => {
+    caches.open(CACHE).then((cache) => {
+      console.log('[ServiceWorker] Caching shell');
+      return cache.addAll(SHELL);
+    }).then(() => caches.open(STATIC_CACHE).then((cache) => {
       console.log('[ServiceWorker] Caching static assets');
       return cache.addAll(STATIC_ASSETS);
-    }).then(() => {
+    })).then(() => {
       console.log('[ServiceWorker] Skip waiting');
       self.skipWaiting();
     })
@@ -44,7 +49,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== STATIC_CACHE && cacheName !== DYNAMIC_CACHE && cacheName !== CACHE_NAME) {
+          if (cacheName !== CACHE && cacheName !== STATIC_CACHE && cacheName !== DYNAMIC_CACHE && cacheName !== CACHE_NAME) {
             console.log('[ServiceWorker] Removing old cache:', cacheName);
             return caches.delete(cacheName);
           }
@@ -72,47 +77,46 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Handle image requests with cache-first strategy
-  if (IMAGE_DOMAINS.some(domain => url.origin === domain)) {
-    event.respondWith(handleImageRequest(request));
-    return;
-  }
+  // P2: always network for Netlify functions/APIs
+  if (url.pathname.startsWith('/.netlify/')) return;
 
-  // Handle API requests with network-first strategy
+  // Handle cross-origin API requests with network-first caching
+  // (must come BEFORE the generic cross-origin passthrough)
   if (url.hostname === 'api.themoviedb.org' || url.hostname === 'api.anthropic.com') {
     event.respondWith(handleApiRequest(request));
     return;
   }
 
-  // Handle static and dynamic content with stale-while-revalidate
+  // P2: other cross-origin requests that aren't image.tmdb.org pass through unchanged
+  if (url.hostname !== 'image.tmdb.org' && url.origin !== location.origin) return;
+
+  // P2: posters (image.tmdb.org) — cache-first from DYNAMIC_CACHE
+  if (url.hostname === 'image.tmdb.org') {
+    event.respondWith(caches.open(DYNAMIC_CACHE).then(async c => {
+      const hit = await c.match(event.request);
+      if (hit) return hit;
+      try {
+        const res = await fetch(event.request);
+        if (res.ok) c.put(event.request, res.clone());
+        return res;
+      } catch (err) { return Response.error(); }
+    }));
+    return;
+  }
+
+  // P2: shell assets — stale-while-revalidate from CACHE
+  if (SHELL.includes(url.pathname) || url.pathname === '/') {
+    event.respondWith(caches.open(CACHE).then(async c => {
+      const hit = await c.match(event.request);
+      const net = fetch(event.request).then(res => { if (res.ok) c.put(event.request, res.clone()); return res; }).catch(() => hit);
+      return hit || net;
+    }));
+    return;
+  }
+
+  // Handle all other content with stale-while-revalidate
   event.respondWith(handleContentRequest(request));
 });
-
-// Image caching strategy - cache first, then network
-async function handleImageRequest(request) {
-  const cachedResponse = await caches.match(request);
-
-  if (cachedResponse) {
-    // Return cached image immediately
-    return cachedResponse;
-  }
-
-  try {
-    const networkResponse = await fetch(request);
-
-    if (networkResponse.ok) {
-      // Cache the image for future use
-      const cache = await caches.open(DYNAMIC_CACHE);
-      cache.put(request, networkResponse.clone());
-    }
-
-    return networkResponse;
-  } catch (error) {
-    console.log('[ServiceWorker] Image fetch failed:', error);
-    // Return a placeholder or empty response
-    return new Response('', { status: 404 });
-  }
-}
 
 // API caching strategy - network first, fallback to cache
 async function handleApiRequest(request) {
@@ -271,9 +275,9 @@ self.addEventListener('periodicsync', (event) => {
 
 async function updateTrendingContent() {
   console.log('[ServiceWorker] Updating trending content in background...');
-  // Pre-fetch trending content for faster load next time
+  // Pre-fetch trending content via the Netlify proxy for faster load next time
   try {
-    await fetch('https://api.themoviedb.org/3/trending/all/day?api_key=2dca580c2a14b55200e784d157207b4d');
+    await fetch('/.netlify/functions/tmdb?path=/trending/all/day');
   } catch (error) {
     console.log('[ServiceWorker] Failed to pre-fetch trending:', error);
   }
