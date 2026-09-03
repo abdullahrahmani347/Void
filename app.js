@@ -1,9 +1,12 @@
 /* VOID Streaming — app.js (P0 + P1 + P2)
-   P1: serverless API proxies, progress preservation, runtime-based next-ep,
-       TV genre mapping, banner autoplay pause (WCAG 2.2.2).
-   P2: TMDB proxy available as primary; direct key as fallback. */
-const API_KEY = '***REMOVED***';
-const BASE = 'https://api.themoviedb.org/3';
+    P1: serverless API proxies, progress preservation, runtime-based next-ep,
+        TV genre mapping, banner autoplay pause (WCAG 2.2.2), prefers-reduced-motion.
+    P2: TMDB proxy is the primary API path (key stays server-side when deployed).
+        No API key is bundled in client code — a committed key fails Netlify's
+        secrets scan and is public to anyone who views source. */
+// Optional LOCAL dev key for file:// / static-host testing (never commit it):
+//   localStorage.setItem('void_tmdb_key', 'your-key')
+const API_KEY = (() => { try { return localStorage.getItem('void_tmdb_key') || ''; } catch (e) { return ''; } })();
 const IMG = 'https://image.tmdb.org/t/p/w342';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
 const IMG_LG = 'https://image.tmdb.org/t/p/w1280';
@@ -26,8 +29,33 @@ const MOOD_MAP = {
 const esc = s => String(s ?? '').replace(/[&<>"'`]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
 const MediaCache = new Map();
-function cacheMedia(id, type, title, poster){ MediaCache.set(type + ':' + id, { id, type, title: title || '', poster: poster || '' }); }
-function getCached(id, type){ return MediaCache.get(type + ':' + id) || { id, type, title: '', poster: '' }; }
+// L-13: cache writes MERGE — sparse writers (personal rows fabricate items
+// with no dates/ratings, similar lists may repeat a title) can never erase
+// richer metadata saved earlier from details/banner/search payloads.
+function cacheMedia(id, type, title, poster, extra = {}){
+const key = type + ':' + id;
+const prev = MediaCache.get(key) || {};
+MediaCache.set(key, { id, type, title: title || prev.title || '', poster: poster || prev.poster || '', year: extra.year || prev.year || '', rating: extra.rating || prev.rating || 0 });
+}
+function getCached(id, type){ return MediaCache.get(type + ':' + id) || { id, type, title: '', poster: '', year: '', rating: 0 }; }
+// L-15: highlight runs over the RAW string and escapes each half around the
+// match. The old version matched inside esc()-escaped entities, so a query
+// like "amp" could split &amp; apart and corrupt the markup.
+function highlight(title, q) {
+if (!q) return esc(title);
+const t = String(title || '');
+const lower = t.toLowerCase();
+const needle = String(q).toLowerCase();
+if (!needle) return esc(t);
+let out = '', i = 0;
+while (i < t.length) {
+const hit = lower.indexOf(needle, i);
+if (hit === -1) { out += esc(t.slice(i)); break; }
+out += esc(t.slice(i, hit)) + '<span class="highlight">' + esc(t.slice(hit, hit + needle.length)) + '</span>';
+i = hit + needle.length;
+}
+return out;
+}
 const imgObserver = ('IntersectionObserver' in window) ? new IntersectionObserver((entries, obs) => {
   entries.forEach(e => {
     if (!e.isIntersecting) return;
@@ -52,9 +80,13 @@ bannerItems: [], bannerIndex: 0, bannerTimer: null,
 activeGenre: null, currentDetails: null, currentTrailerKey: null,
 isDragging: false, dragStartX: 0, dragScrollLeft: 0,
 advDecade: '', advRuntime: '', advRating: '',
-hoverTrailerTimers: {}, searchResultIndex: -1,
+searchResultIndex: -1, // Q-04: state.hoverTrailerTimers was declared and never used — removed
 aiChatHistory: [], nextEpTimer: null,
 episodeRuntimes: {},
+openSeq: 0,            // L-05: stale openMedia responses are discarded via this token
+playbackSession: null, // L-04: playback context that survives closeModal (mini player)
+_lastProgressWrite: 0, _lastProgress: 0, // L-03: progress-write throttle state
+_routePushed: false,   // U-05: whether the current modal route owns a history entry
 deferredInstallPrompt: null
 };
 
@@ -70,7 +102,9 @@ updateMetaTag('og:title', fullTitle);
 updateMetaTag('og:description', metaDesc.content);
 updateMetaTag('og:image', image || '');
 updateMetaTag('og:type', type === 'movie' ? 'video.movie' : 'video.tv_show');
-const pageUrl = `${window.location.origin}${window.location.pathname}?type=${type}&id=${state.mediaId}`;
+// F-03: og:url/canonical must be absolute — a relative "?type=..&id=.." cannot
+// be resolved by scrapers. Built from the actual deployment origin.
+const pageUrl = `${location.origin}${location.pathname}?type=${encodeURIComponent(type)}&id=${encodeURIComponent(state.mediaId)}`;
 updateMetaTag('og:url', pageUrl);
 let canonical = document.querySelector('link[rel="canonical"]');
 if (canonical) canonical.setAttribute('href', pageUrl);
@@ -93,10 +127,12 @@ const schema = {
 "name": d.title || d.name,
 "image": d.poster_path ? `${IMG}${d.poster_path}` : "",
 "description": d.overview,
-"datePublished": d.release_date || d.first_air_date,
-"aggregateRating": { "@type": "AggregateRating", "ratingValue": d.vote_average, "bestRating": "10", "worstRating": "1", "ratingCount": d.vote_count }
+"datePublished": d.release_date || d.first_air_date
 };
 if (type === 'tv' && d.number_of_seasons) schema.numberOfSeasons = d.number_of_seasons;
+// F-03: numeric best/worstRating, and the rating block is omitted entirely
+// when there are no votes — Google flags string ratings and 0-count ratings.
+if (d.vote_average && d.vote_count > 0) schema.aggregateRating = { "@type": "AggregateRating", "ratingValue": Math.round(d.vote_average * 10) / 10, "bestRating": 10, "worstRating": 1, "ratingCount": d.vote_count };
 script.textContent = JSON.stringify(schema);
 }
 
@@ -120,19 +156,60 @@ el.addEventListener('keydown', el._trapHandler);
 }
 function releaseFocus(el) { if (el._trapHandler) el.removeEventListener('keydown', el._trapHandler); }
 
+// ============ OVERLAY FOCUS MANAGEMENT (P3-3) ============
+// openOverlay/closeOverlay wrap .active-class overlays with a focus trap,
+// initial focus, Escape handling, and focus restoration on close.
+const FOCUSABLE = 'button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])';
+function openOverlay(el, focusTarget) {
+if (!el || el.classList.contains('active')) return;
+el._lastFocus = document.activeElement;
+el.classList.add('active');
+el.setAttribute('aria-hidden', 'false');
+trapFocus(el);
+const target = focusTarget ? el.querySelector(focusTarget) : el.querySelector(FOCUSABLE);
+if (target && typeof target.focus === 'function') setTimeout(() => { try { target.focus(); } catch (e) {} }, 30);
+el._escHandler = e => { if (e.key === 'Escape') closeOverlay(el); };
+document.addEventListener('keydown', el._escHandler);
+}
+function closeOverlay(el) {
+if (!el) return;
+releaseFocus(el);
+el.classList.remove('active');
+el.setAttribute('aria-hidden', 'true');
+if (el._escHandler) { document.removeEventListener('keydown', el._escHandler); el._escHandler = null; }
+const prev = el._lastFocus;
+el._lastFocus = null;
+if (prev && typeof prev.focus === 'function' && prev.isConnected) setTimeout(() => { try { prev.focus(); } catch (e) {} }, 30);
+}
+
 // ============ TOAST ============
+// S-04: toast() used to interpolate `message` straight into innerHTML, so any
+// user-derived string (e.g. a custom list name containing <img …>) became live
+// DOM. The template below is now static markup; the dynamic part is assigned
+// via textContent, which renders every caller's input as literal text.
 function toast(message, type = 'info') {
 const c = document.getElementById('toastContainer');
 const icons = { success: '✓', error: '✕', info: 'ℹ', warning: '⚠' };
 const t = document.createElement('div');
 t.className = `toast ${type}`;
 t.setAttribute('role', 'alert');
-t.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[type]}</span><span class="toast-message">${message}</span><button class="toast-close" aria-label="Dismiss notification" data-action="toast-close">×</button><div class="toast-progress" aria-hidden="true"></div>`;
+t.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[type] || icons.info}</span><span class="toast-message"></span><button class="toast-close" aria-label="Dismiss notification" data-action="toast-close">×</button><div class="toast-progress" aria-hidden="true"></div>`;
+t.querySelector('.toast-message').textContent = message; // S-04: never HTML
 c.appendChild(t);
 setTimeout(() => t.remove(), 3200);
 }
 
 // ============ THEME ============
+// P5-2: lightweight pub/sub store — cross-module events without direct calls.
+// Usage: VoidStore.subscribe('key', fn) returns an unsubscribe fn; VoidStore.publish('key', payload).
+const VoidStore = {
+_listeners: {},
+subscribe(key, fn) { (this._listeners[key] ||= []).push(fn); return () => { this._listeners[key] = (this._listeners[key] || []).filter(f => f !== fn); }; },
+// Q-06: listener failures were swallowed by an empty catch — route them
+// through ErrorMonitor so regressions surface in development.
+publish(key, payload) { (this._listeners[key] || []).forEach(fn => { try { fn(payload); } catch (e) { try { ErrorMonitor.handleError({ message: e?.message || String(e), source: `VoidStore.publish:${key}`, stack: e?.stack, type: 'ui' }); } catch (_) {} } }); }
+};
+window.VoidStore = VoidStore;
 function initTheme() {
 const theme = Store.getTheme();
 document.documentElement.setAttribute('data-theme', theme);
@@ -145,6 +222,7 @@ const next = current === 'dark' ? 'light' : 'dark';
 document.documentElement.setAttribute('data-theme', next);
 localStorage.setItem('void_theme', next);
 updateThemeIcon(next);
+VoidStore.publish('theme:changed', next);
 toast(`${next.charAt(0).toUpperCase() + next.slice(1)} mode activated`, 'info');
 }
 function updateThemeIcon(theme) {
@@ -153,25 +231,66 @@ document.getElementById('themeIcon').innerHTML = theme === 'dark'
 : '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
 }
 
-// ============ API (P1: proxied with direct fallback) ============
+// ============ API (P1: proxied; direct fallback for dev) ============
+// P3-8: beginFetch/endFetch drive a slim top progress bar while API calls
+// are in flight (shared by TMDB + Claude so users see activity).
+let _fetchCount = 0;
+function beginFetch() {
+_fetchCount++;
+const bar = document.getElementById('topProgress');
+if (bar) bar.classList.add('active');
+}
+function endFetch() {
+_fetchCount = Math.max(0, _fetchCount - 1);
+const bar = document.getElementById('topProgress');
+if (bar && _fetchCount === 0) bar.classList.remove('active');
+}
+function initTopProgress() {
+if (document.getElementById('topProgress')) return;
+const bar = document.createElement('div');
+bar.id = 'topProgress';
+bar.className = 'top-progress';
+bar.setAttribute('aria-hidden', 'true');
+document.body.appendChild(bar);
+}
+// ============ P5-8: OFFLINE INDICATOR ============
+function initOfflineIndicator() {
+if (!document.getElementById('offlineBanner')) {
+const b = document.createElement('div');
+b.className = 'offline-banner';
+b.id = 'offlineBanner';
+b.setAttribute('role', 'status');
+b.textContent = 'You are offline — showing cached content.';
+document.body.appendChild(b);
+}
+if (!navigator.onLine) document.body.classList.add('offline-mode');
+window.addEventListener('offline', () => document.body.classList.add('offline-mode'));
+window.addEventListener('online', () => { document.body.classList.remove('offline-mode'); toast('Back online!', 'success'); });
+}
 async function tmdb(endpoint) {
-// Try Netlify proxy first (keeps key server-side in production)
+beginFetch();
+try {
+// 1) Prefer the Netlify proxy (keeps the key server-side when deployed).
 try {
 const r = await fetch(`/.netlify/functions/tmdb?path=${encodeURIComponent(endpoint)}`);
-if (r.ok) return r.json();
-} catch (e) { /* fall through to direct */ }
-// Fallback: direct TMDB call with client-side key
-try {
+const d = await r.json().catch(() => null);
+if (r.ok && d && typeof d === 'object' && !d.error) return d;
+} catch (e) { /* proxy unreachable (file://, static host, offline) — fall through */ }
+// 2) Direct TMDB call — ONLY with a locally-configured dev key (see header).
+//    Deployed sites always have the Netlify function available.
+if (!API_KEY) throw new Error('TMDB unavailable — deploy with the Netlify function, or set a dev key: localStorage.setItem("void_tmdb_key", "…")');
 const sep = endpoint.includes('?') ? '&' : '?';
-const r = await fetch(`${BASE}${endpoint}${sep}api_key=${API_KEY}`);
+const r = await fetch(`https://api.themoviedb.org/3${endpoint}${sep}api_key=${API_KEY}`);
 if (r.ok) return r.json();
-} catch (e) { /* fall through to error */ }
-throw new Error(`API unavailable: ${endpoint}`);
+throw new Error(`TMDB API error ${r.status} (${endpoint})`);
+} finally { endFetch(); }
 }
 async function tmdbList(endpoint) { const d = await tmdb(endpoint); return d.results || []; }
 
 // ============ ANTHROPIC (P1: proxied) ============
 async function callClaude(messages, system = '') {
+beginFetch();
+try {
 const body = { messages };
 if (system) body.system = system;
 const r = await fetch('/.netlify/functions/ai', {
@@ -182,24 +301,45 @@ body: JSON.stringify(body)
 if (!r.ok) throw new Error('AI error');
 const d = await r.json();
 return d.text || '';
+} finally { endFetch(); }
 }
 
 // ============ FEATURED BANNER ============
 async function initBanner() {
+const container = document.getElementById('featuredBanner');
+// Skeleton while trending loads — never leave a black void on slow connections.
+container.innerHTML = `<div class="banner-skeleton" role="status" aria-label="Loading featured titles">
+  <div class="banner-skeleton-inner">
+    <div class="sk-pill"></div>
+    <div class="sk-line sk-title"></div>
+    <div class="sk-line sk-text"></div>
+    <div class="sk-line sk-text short"></div>
+    <div class="sk-btn"></div>
+  </div></div>`;
 try {
 const items = await tmdbList('/trending/all/day');
-state.bannerItems = items.filter(i => i.backdrop_path).slice(0, 6);
+state.bannerItems = items.filter(i => i.backdrop_path || i.poster_path).slice(0, 6);
+if (!state.bannerItems.length) throw new Error('no banner items');
 renderBanner();
 resumeBanner();
 initBannerPause();
 } catch (e) {
-document.getElementById('featuredBanner').style.display = 'none';
+// Never hide the hero silently — offer a retry instead.
+container.innerHTML = `<div class="banner-slide active">
+  <div class="banner-gradient" aria-hidden="true"></div>
+  <div class="banner-content">
+    <div class="banner-meta" aria-hidden="true"><span>VOID</span><span>FEATURED</span></div>
+    <h2 class="banner-title">The spotlight is warming up</h2>
+    <p class="banner-overview">We couldn't load today's featured lineup. Check your connection and try again.</p>
+    <div class="banner-buttons"><button class="btn btn-primary" data-action="retry-banner">↻ RETRY</button></div>
+  </div></div>`;
 }
 }
-// P1: pause/resume autoplay (WCAG 2.2.2)
+// P1: pause/resume autoplay (WCAG 2.2.2 + prefers-reduced-motion)
 function pauseBanner() { clearInterval(state.bannerTimer); state.bannerTimer = null; }
 function resumeBanner() {
 if (state.bannerTimer || !state.bannerItems.length) return;
+if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 state.bannerTimer = setInterval(() => {
 state.bannerIndex = (state.bannerIndex + 1) % state.bannerItems.length;
 updateBannerSlide();
@@ -220,13 +360,15 @@ let html = items.map((item, i) => {
 const id = item.id;
 const type = item.media_type || 'movie';
 const title = item.title || item.name || '';
-cacheMedia(id, type, title, item.poster_path || '');
+cacheMedia(id, type, title, item.poster_path || '', { year: (item.release_date || item.first_air_date || '').split('-')[0], rating: item.vote_average || 0 }); // L-13
 const t = esc(title);
 const year = (item.release_date || item.first_air_date || '').split('-')[0];
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
 const typeLabel = type === 'movie' ? 'Movie' : 'TV Show';
+// Backdrop with poster fallback — some titles only ship a poster.
+const backdrop = item.backdrop_path ? `${IMG_LG}${item.backdrop_path}` : (item.poster_path ? `${IMG_LG}${item.poster_path}` : '');
 return `<div class="banner-slide ${i === 0 ? 'active' : ''}" data-index="${i}" role="group" aria-label="${t}, ${typeLabel}">
-  <div class="banner-backdrop" style="background-image:url('${IMG_LG}${item.backdrop_path}')" aria-hidden="true"></div>
+  <div class="banner-backdrop" style="background-image:url('${backdrop}');background-color:#111" aria-hidden="true"></div>
   <div class="banner-gradient" aria-hidden="true"></div>
   <div class="banner-content">
     <div class="banner-meta" aria-label="Details"><span>${year}</span><span>${rating} ★</span><span>${typeLabel}</span></div>
@@ -241,12 +383,20 @@ return `<div class="banner-slide ${i === 0 ? 'active' : ''}" data-index="${i}" r
 </div>`;
 }).join('');
 html += `<div class="banner-dots" role="tablist" aria-label="Banner slides">${items.map((item, i) => `<button class="banner-dot ${i === 0 ? 'active' : ''}" role="tab" aria-selected="${i === 0}" aria-label="Slide ${i + 1}: ${esc(item.title || item.name)}" data-action="go-to-banner" data-index="${i}"></button>`).join('')}</div>`;
+html += '<div class="banner-progress" aria-hidden="true"><div class="banner-progress-bar" style="animation-duration:var(--banner-interval)"></div></div>';
 container.innerHTML = html;
+container.setAttribute('tabindex', '0');
+container.addEventListener('keydown', e => {
+if (e.key === 'ArrowRight') { e.preventDefault(); state.bannerIndex = (state.bannerIndex + 1) % state.bannerItems.length; updateBannerSlide(); }
+else if (e.key === 'ArrowLeft') { e.preventDefault(); state.bannerIndex = (state.bannerIndex - 1 + state.bannerItems.length) % state.bannerItems.length; updateBannerSlide(); }
+});
 }
 function goToBanner(index) { state.bannerIndex = index; updateBannerSlide(); }
 function updateBannerSlide() {
 document.querySelectorAll('.banner-slide').forEach((s, i) => s.classList.toggle('active', i === state.bannerIndex));
 document.querySelectorAll('.banner-dot').forEach((d, i) => { d.classList.toggle('active', i === state.bannerIndex); d.setAttribute('aria-selected', i === state.bannerIndex); });
+const bar = document.querySelector('.banner-progress-bar');
+if (bar) { bar.style.animation = 'none'; bar.offsetHeight; bar.style.animation = null; }
 }
 
 // ============ SEARCH ============
@@ -260,14 +410,15 @@ const q = e.target.value.trim();
 clearBtn.style.display = q ? 'block' : 'none';
 if (q.length < 2) { results.classList.remove('active'); input.setAttribute('aria-expanded', 'false'); showSearchHome(); return; }
 state.searchTimeout = setTimeout(() => searchMedia(q), 300);
-saveSearchHistory(q);
+// V-01: history is committed inside searchMedia() when a search actually
+// runs — saving here captured every keystroke fragment as a "recent search".
 });
 clearBtn.addEventListener('click', () => { input.value = ''; clearBtn.style.display = 'none'; results.classList.remove('active'); input.setAttribute('aria-expanded', 'false'); input.focus(); showSearchHome(); });
 input.addEventListener('focus', () => { if (input.value.trim().length >= 2) { results.classList.add('active'); input.setAttribute('aria-expanded', 'true'); } else showSearchHome(); });
 input.addEventListener('keydown', e => {
 const items = results.querySelectorAll('.search-result-item');
-if (e.key === 'ArrowDown') { e.preventDefault(); state.searchResultIndex = Math.min(state.searchResultIndex + 1, items.length - 1); items.forEach((el, i) => el.classList.toggle('selected', i === state.searchResultIndex)); }
-else if (e.key === 'ArrowUp') { e.preventDefault(); state.searchResultIndex = Math.max(state.searchResultIndex - 1, -1); items.forEach((el, i) => el.classList.toggle('selected', i === state.searchResultIndex)); }
+if (e.key === 'ArrowDown') { e.preventDefault(); state.searchResultIndex = Math.min(state.searchResultIndex + 1, items.length - 1); items.forEach((el, i) => { el.classList.toggle('selected', i === state.searchResultIndex); el.setAttribute('aria-selected', i === state.searchResultIndex ? 'true' : 'false'); }); }
+else if (e.key === 'ArrowUp') { e.preventDefault(); state.searchResultIndex = Math.max(state.searchResultIndex - 1, -1); items.forEach((el, i) => { el.classList.toggle('selected', i === state.searchResultIndex); el.setAttribute('aria-selected', i === state.searchResultIndex ? 'true' : 'false'); }); }
 else if (e.key === 'Enter' && state.searchResultIndex >= 0) { items[state.searchResultIndex]?.click(); }
 });
 document.addEventListener('click', e => { if (!e.target.closest('.search-section')) { results.classList.remove('active'); input.setAttribute('aria-expanded', 'false'); } });
@@ -290,17 +441,81 @@ document.querySelectorAll('#decadeChips .adv-chip').forEach(c => c.addEventListe
 document.querySelectorAll('#runtimeChips .adv-chip').forEach(c => c.addEventListener('click', () => { document.querySelectorAll('#runtimeChips .adv-chip').forEach(x => x.classList.remove('active')); c.classList.add('active'); state.advRuntime = c.dataset.runtime; }));
 document.querySelectorAll('#ratingChips .adv-chip').forEach(c => c.addEventListener('click', () => { document.querySelectorAll('#ratingChips .adv-chip').forEach(x => x.classList.remove('active')); c.classList.add('active'); state.advRating = c.dataset.rating; }));
 document.querySelectorAll('.adv-chip[data-decade=""],.adv-chip[data-runtime=""],.adv-chip[data-rating=""]').forEach(c => c.classList.add('active'));
+// L-09: the decade/runtime/rating chips used to feed ONLY the AI prompt. These
+// helpers translate them into concrete TMDB /discover params (AI path) and a
+// client-side filter (standard path), and surface them as active constraints.
+function advancedFilterParams(type) {
+const p = new URLSearchParams();
+if (state.advDecade) {
+const start = parseInt(state.advDecade, 10), end = start + 9;
+if (type === 'tv') { p.set('first_air_date.gte', `${start}-01-01`); p.set('first_air_date.lte', `${end}-12-31`); }
+else { p.set('primary_release_date.gte', `${start}-01-01`); p.set('primary_release_date.lte', `${end}-12-31`); }
+}
+if (state.advRuntime) p.set('with_runtime.lte', state.advRuntime);
+if (state.advRating) { p.set('vote_average.gte', state.advRating); p.set('vote_count.gte', '50'); }
+return p.toString();
+}
+function advancedFilterNote() {
+const parts = [];
+if (state.advDecade) parts.push(`${state.advDecade}s`);
+if (state.advRuntime) parts.push(`under ${state.advRuntime} min`);
+if (state.advRating) parts.push(`${state.advRating}+ stars`);
+return parts.length ? `Active filters: ${parts.join(' · ')}` : '';
+}
+// L-09: standard text search honors decade + rating chips (runtime needs a
+// /discover call, so it only applies on the AI path — noted in the UI).
+function applyAdvancedFiltersToResults(results) {
+const dec = state.advDecade ? parseInt(state.advDecade, 10) : null;
+const ra = state.advRating ? parseFloat(state.advRating) : null;
+if (!dec && !ra) return results;
+return results.filter(it => {
+if (ra && !(it.vote_average >= ra)) return false;
+if (dec) { const y = parseInt((it.release_date || it.first_air_date || '').slice(0, 4), 10); if (!Number.isFinite(y) || y < dec || y > dec + 9) return false; }
+return true;
+});
+}
+// L-10: the model used to hardcode /discover/movie (TV could never be answered)
+// and its raw output went straight into the URL. The reply is now validated
+// against a parameter allowlist with sane values, and the endpoint follows the
+// media type the model picks (sanity-checked against the query text).
+const DISCOVER_ALLOWLIST = new Set(['with_genres', 'primary_release_date.gte', 'primary_release_date.lte', 'first_air_date.gte', 'first_air_date.lte', 'with_runtime.gte', 'with_runtime.lte', 'vote_average.gte', 'vote_count.gte', 'vote_count.lte', 'sort_by', 'with_original_language', 'year', 'first_air_date_year']);
+function sanitizeDiscoverParams(raw, type) {
+const out = new URLSearchParams();
+if (!raw) return '';
+String(raw).split('&').forEach(pair => {
+const i = pair.indexOf('=');
+if (i < 1) return;
+const k = pair.slice(0, i).trim();
+const v = pair.slice(i + 1).trim();
+if (!DISCOVER_ALLOWLIST.has(k)) return; // drop unknown/hallucinated params
+let decoded = v;
+try { decoded = decodeURIComponent(v); } catch (e) { return; }
+if (!/^[\w .,:\-+%|]{0,60}$/.test(decoded)) return; // value sanity
+if ((k === 'primary_release_date.gte' || k === 'primary_release_date.lte' || k === 'year') && type !== 'movie') return;
+if ((k === 'first_air_date.gte' || k === 'first_air_date.lte' || k === 'first_air_date_year') && type !== 'tv') return;
+out.set(k, v);
+});
+return out.toString();
+}
+function detectMediaTypeFromQuery(q) { return /\b(tv|series|show|shows|episode|season|anime|sitcom)\b/i.test(q) ? 'tv' : 'movie'; }
 document.getElementById('nlSearchBtn').addEventListener('click', async () => {
 const q = input.value.trim();
 if (!q) return;
 toast('Interpreting your search with AI...', 'info');
+showSearchSpinner(true);
 try {
-const prompt = `The user wants to find a movie or TV show. Their description: "${q}". Also their filters: decade=${state.advDecade || 'any'}, max runtime=${state.advRuntime || 'any'}, min rating=${state.advRating || 'any'}. Return a TMDB /discover/movie query string (just the parameters after the '?', no base URL, do NOT include an api_key parameter) that best matches this request. Reply with ONLY the parameter string, nothing else.`;
-const params = await callClaude([{ role: 'user', content: prompt }]);
-const url = `/discover/movie?${params}`;
-const res = await tmdbList(url);
-displaySearchResults(res.slice(0, 10).map(m => ({ ...m, media_type: 'movie' })));
-} catch (e) { toast('AI search unavailable, using standard search', 'warning'); searchMedia(q); }
+const prompt = `The user wants to find a movie or a TV show. Their description: "${q}". Their filters: decade=${state.advDecade || 'any'}, max runtime=${state.advRuntime || 'any'}, min rating=${state.advRating || 'any'}. First decide whether media_type is "movie" or "tv". Then return a TMDB /discover query string (only the parameters after the '?', no base URL, do NOT include an api_key parameter). Reply in exactly this format: media_type|parameter_string`;
+const raw = await callClaude([{ role: 'user', content: prompt }]);
+const [aiTypeRaw, aiParamsRaw] = String(raw).trim().split('|');
+const type = String(aiTypeRaw || '').trim() === 'tv' ? 'tv' : (String(aiTypeRaw || '').trim() === 'movie' ? 'movie' : detectMediaTypeFromQuery(q));
+// Chips ALWAYS apply (L-09); validated model params are merged in (L-10).
+const clean = new URLSearchParams(sanitizeDiscoverParams(aiParamsRaw, type));
+new URLSearchParams(advancedFilterParams(type)).forEach((v, k) => { if (!clean.has(k)) clean.set(k, v); });
+const qs = clean.toString();
+const res = await tmdbList(`/discover/${type}${qs ? '?' + qs : ''}`);
+displaySearchResults(res.slice(0, 10).map(m => ({ ...m, media_type: type })), advancedFilterNote());
+saveSearchHistory(q); // V-01: only executed searches enter history
+} catch (e) { toast('AI search unavailable — using filtered standard search', 'warning'); searchMedia(q); }
 });
 }
 function saveSearchHistory(q) {
@@ -318,19 +533,23 @@ results.innerHTML = `<div class="search-history-section">
     <span class="search-history-label">Recent</span>
     <button class="search-history-clear" id="searchHistoryClear">Clear</button>
   </div>
-  ${history.map(h => `<div class="search-history-item" role="option" data-q="${esc(h)}" tabindex="0"><span class="shi-icon" aria-hidden="true">↩</span>${esc(h)}</div>`).join('')}
+  ${history.map(h => `<button type="button" class="search-history-item" role="option" tabindex="-1" data-q="${esc(h)}"><span class="shi-icon" aria-hidden="true">↩</span>${esc(h)}</button>`).join('')}
 </div>`;
 results.classList.add('active');
 document.getElementById('searchInput').setAttribute('aria-expanded', 'true');
 results.querySelector('#searchHistoryClear').addEventListener('click', () => { Store.set('search_history', []); results.classList.remove('active'); });
 results.querySelectorAll('.search-history-item').forEach(el => {
-const run = () => { const q = el.dataset.q; document.getElementById('searchInput').value = q; searchMedia(q); };
-el.addEventListener('click', run);
-el.addEventListener('keypress', e => { if (e.key === 'Enter') run(); });
+el.addEventListener('click', () => { const q = el.dataset.q; document.getElementById('searchInput').value = q; searchMedia(q); });
 });
+}
+// P3-8: spinner shown next to the search field while a search is in flight.
+function showSearchSpinner(on) {
+const s = document.getElementById('searchSpinner');
+if (s) s.hidden = !on;
 }
 async function searchMedia(query) {
 state.searchResultIndex = -1;
+showSearchSpinner(true);
 try {
 const filter = state.searchFilter;
 let results;
@@ -341,37 +560,40 @@ results = (d.results || []).filter(i => i.media_type === 'movie' || i.media_type
 const d = await tmdb(`/search/${filter}?query=${encodeURIComponent(query)}&include_adult=false`);
 results = (d.results || []).map(i => ({ ...i, media_type: filter }));
 }
-displaySearchResults(results.slice(0, 10));
-} catch (e) { toast('Search failed', 'error'); }
+displaySearchResults(applyAdvancedFiltersToResults(results.slice(0, 10)), advancedFilterNote()); // L-09: chips constrain the standard path too
+saveSearchHistory(query); // V-01: commit here — a real search just completed
+showSearchSpinner(false);
+} catch (e) { toast('Search failed', 'error'); showSearchSpinner(false); }
 }
-function displaySearchResults(results) {
+function displaySearchResults(results, filterNote) {
+showSearchSpinner(false);
 const container = document.getElementById('searchResults');
 const input = document.getElementById('searchInput');
 const q = input.value.trim();
-if (!results.length) { container.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-muted)">No results found</div>'; container.classList.add('active'); input.setAttribute('aria-expanded', 'true'); return; }
-container.innerHTML = results.map(item => {
+if (!results.length) { container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:1.5rem;margin-bottom:0.5rem">🔍</div>No results for "' + esc(q) + '" — try a different search or use AI search</div>'; container.classList.add('active'); input.setAttribute('aria-expanded', 'true'); return; }
+const note = filterNote ? `<div class="active-filter-note" role="note">${esc(filterNote)}</div>` : '';
+container.innerHTML = note + results.map(item => {
 const id = item.id;
 const type = item.media_type || 'movie';
 const title = item.title || item.name || '';
-cacheMedia(id, type, title, item.poster_path || '');
+cacheMedia(id, type, title, item.poster_path || '', { year: (item.release_date || item.first_air_date || '').split('-')[0], rating: item.vote_average || 0 });
 const t = esc(title);
 const year = (item.release_date || item.first_air_date || '').split('-')[0];
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
 const poster = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
-const hl = q ? t.replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<span class="highlight">$1</span>') : t;
-return `<div class="search-result-item" role="option" data-id="${id}" data-type="${type}" tabindex="0">
-  <img src="${esc(poster)}" alt="${t}" class="search-result-poster" loading="lazy">
+const hl = highlight(title, q); // L-15: highlight raw text, escape both halves
+return `<button type="button" class="search-result-item" role="option" tabindex="-1" aria-selected="false" data-id="${id}" data-type="${type}">
+  <img src="${esc(poster)}" alt="${t} — ${type === 'movie' ? 'movie' : 'TV show'} poster, ${year}" class="search-result-poster" loading="lazy">
   <div class="search-result-info">
     <div class="search-result-title">${hl}</div>
     <div class="search-result-meta"><span>${year}</span><span>${rating} ★</span><span class="type-badge ${type}">${type.toUpperCase()}</span></div>
   </div>
-</div>`;
+</button>`;
 }).join('');
 container.classList.add('active'); input.setAttribute('aria-expanded', 'true');
+announce(`Found ${results.length} results for ${q}`);
 container.querySelectorAll('.search-result-item').forEach(el => {
-const run = () => { openMedia(parseInt(el.dataset.id), el.dataset.type); container.classList.remove('active'); input.value=''; input.setAttribute('aria-expanded','false'); };
-el.addEventListener('click', run);
-el.addEventListener('keypress', e => { if (e.key === 'Enter') run(); });
+el.addEventListener('click', () => { openMedia(parseInt(el.dataset.id), el.dataset.type); container.classList.remove('active'); input.value=''; input.setAttribute('aria-expanded','false'); });
 });
 }
 
@@ -387,6 +609,7 @@ const section = document.getElementById('genreResultsSection');
 document.getElementById('genreResultsTitle').textContent = name.toUpperCase();
 section.style.display = 'block';
 renderSkeletons('genreResults', 10);
+announce(`Loading ${name} results`);
 try {
 const [movies, tv] = await Promise.all([
 tmdbList(`/discover/movie?with_genres=${id}&sort_by=popularity.desc`),
@@ -394,7 +617,8 @@ tmdbList(`/discover/tv?with_genres=${tvGenreId(id)}&sort_by=popularity.desc`)
 ]);
 const combined = [...movies.map(m => ({ ...m, media_type: 'movie' })), ...tv.map(t => ({ ...t, media_type: 'tv' }))];
 combined.sort((a, b) => b.popularity - a.popularity);
-renderContentRow('genreResults', combined.slice(0, 20));
+    renderContentRow('genreResults', combined.slice(0, 20));
+    announce(`${name} results loaded`);
 section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 } catch (e) { toast('Failed to load genre', 'error'); }
 }
@@ -418,94 +642,214 @@ renderSkeletons('trendingMovies', 10);
 try {
 const results = await tmdbList(endpoint);
 renderContentRow('trendingMovies', results.map(m => ({ ...m, media_type: 'movie' })));
-} catch (e) { toast('Filter failed', 'error'); }
+announce('Filters applied, trending results updated');
+} catch (e) { renderSectionError('trendingMovies', applyFilters); }
 }
 
 // ============ RENDER ============
+// P3-2: announce() posts concise status updates to a hidden polite live
+// region so screen readers hear about async content changes without the
+// verbose innerHTML dump being read out.
+function announce(message) {
+let region = document.getElementById('sr-announcer');
+if (!region) {
+region = document.createElement('div');
+region.id = 'sr-announcer';
+region.className = 'sr-only';
+region.setAttribute('role', 'status');
+region.setAttribute('aria-live', 'polite');
+document.body.appendChild(region);
+}
+region.textContent = '';
+requestAnimationFrame(() => { region.textContent = message; });
+}
+// P3-2: mark every dynamically updated container as a polite live region.
+// aria-busy (set during skeleton phase, cleared after render) stops the
+// initial skeleton injection from being announced.
+function initLiveRegions() {
+document.querySelectorAll('.scroll-row, #episodeList, #similarGrid').forEach(r => { if (!r.getAttribute('aria-live')) r.setAttribute('aria-live', 'polite'); });
+}
 function renderSkeletons(id, count) {
 const c = document.getElementById(id);
-if (c) c.innerHTML = Array(count).fill('').map(() => `<div class="skeleton-card" aria-hidden="true"><div class="skeleton skeleton-poster"></div><div class="skeleton skeleton-text" style="width:80%"></div><div class="skeleton skeleton-text" style="width:50%"></div></div>`).join('');
+if (c) { c.setAttribute('aria-busy', 'true'); c.innerHTML = Array(count).fill('').map(() => `<div class="skeleton-card" aria-hidden="true"><div class="skeleton skeleton-poster"></div><div class="skeleton skeleton-text" style="width:80%"></div><div class="skeleton skeleton-text" style="width:50%"></div></div>`).join(''); }
 }
-function renderContentRow(containerId, items) {
-const c = document.getElementById(containerId);
+// ============ P5-10: SECTION ERROR BOUNDARY ============
+// Replace a failed section with a friendly message + RETRY button that
+// re-invokes the section's own loader (registered in SECTION_RETRY).
+const SECTION_RETRY = {};
+function renderSectionError(id, retryFn, message) {
+const c = document.getElementById(id);
 if (!c) return;
-if (!items.length) { c.innerHTML = '<div style="padding:1rem;color:var(--text-muted)">Nothing to show</div>'; return; }
-const watchlist = Store.get('watchlist');
-const continueW = Store.get('continue_watching');
-c.innerHTML = items.slice(0, 20).map(item => {
+c.setAttribute('aria-busy', 'false');
+if (retryFn) SECTION_RETRY[id] = retryFn;
+c.innerHTML = `<div class="section-error" role="alert"><span>${esc(message || 'Something went wrong loading this section.')}</span><button type="button" class="btn btn-outline btn-sm" data-action="retry-section" data-target="${id}">RETRY</button></div>`;
+}
+// Q-05: single card builder — renderContentRowHTML, loadNewThisWeek and
+// renderTop10 used to hand-roll three drifting templates (New This Week had
+// silently lost its watchlist/share/diary buttons). opts:
+//   top10 → compact ranked layout; _isNew on the item → NEW badge;
+//   watchlist/continueW passed in so rows fetch store state once.
+function buildCardHTML(item, opts = {}) {
 const id = item.id;
 const type = item.media_type || 'movie';
 const title = item.title || item.name || '';
-cacheMedia(id, type, title, item.poster_path || '');
-const t = esc(title);
 const year = (item.release_date || item.first_air_date || '').split('-')[0];
+cacheMedia(id, type, title, item.poster_path || '', { year, rating: item.vote_average || 0 });
+const t = esc(title);
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
-const genres = (item.genre_ids || []).slice(0, 2).map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
-const isFav = watchlist.some(w => w.id === id);
-const cw = continueW.find(w => w.id === id);
-const progress = cw ? cw.progress : (item.progress || 0);
 const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
 const posterSm = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
-return `<div class="content-card" role="listitem" tabindex="0" aria-label="${t}, ${year}, ${rating} stars" data-action="open-media" data-keyboard="true" data-id="${id}" data-type="${type}">
-  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="(max-width: 600px) 185px, 342px" alt="${t}" class="card-poster" loading="lazy">
-  <div class="rating-badge" aria-hidden="true">${rating} ★</div>
-  <div class="card-actions" aria-hidden="true">
-    <button class="card-action-btn ${isFav ? 'favorited' : ''}" data-action="toggle-watchlist" data-stop-propagation="true" data-id="${id}" data-type="${type}" title="${isFav ? 'Remove from watchlist' : 'Add to watchlist'}">
-      <svg viewBox="0 0 24 24" fill="${isFav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-    </button>
-    <button class="card-action-btn" data-action="share-content" data-stop-propagation="true" data-id="${id}" data-type="${type}" title="Share">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-    </button>
-    <button class="card-action-btn" data-action="add-to-diary" data-stop-propagation="true" data-id="${id}" data-type="${type}" title="Add to diary">📖</button>
-  </div>
-  <div class="card-overlay" aria-hidden="true">
-    <div class="card-title">${t}</div>
-    <div class="card-meta">${year}</div>
-    ${genres.length ? `<div class="genre-tags">${genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join('')}</div>` : ''}
-    <div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
-  </div>
-  ${progress > 0 ? `<div class="progress-bar" aria-hidden="true"><div class="progress-bar-fill" style="width:${progress}%"></div></div>` : ''}
-  <div class="card-trailer-preview" aria-hidden="true"></div>
+const mediaKind = type === 'movie' ? 'movie' : 'TV show';
+if (opts.top10) {
+return `<button type="button" class="top10-card" aria-label="#${opts.rank} ${t} — ${mediaKind}" data-action="open-media" data-id="${id}" data-type="${type}">
+  <div class="top10-number" aria-hidden="true">${opts.rank}</div>
+  <img class="top10-poster" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="130px" alt="${t} — ${mediaKind} poster" loading="lazy">
+  <div class="top10-info"><div class="top10-title">${t}</div><div class="top10-meta">${item.vote_average ? item.vote_average.toFixed(1) + ' ★' : ''}</div></div>
+</button>`;
+}
+const watchlist = opts.watchlist || Store.get('watchlist');
+const continueW = opts.continueW || Store.get('continue_watching');
+const isFav = watchlist.some(w => String(w.id) === String(id) && w.type === type); // V-02
+const cw = continueW.find(w => String(w.id) === String(id) && w.type === type); // V-02
+const progress = cw ? cw.progress : (item.progress || 0);
+const genres = (item.genre_ids || []).slice(0, 2).map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
+return `<div class="card-wrap">
+<button type="button" class="content-card" aria-label="${t} — ${mediaKind}, ${year}, rated ${rating} out of 10" data-action="open-media" data-id="${id}" data-type="${type}">
+<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="(max-width: 600px) 185px, 342px" alt="${t} — ${mediaKind} poster, ${year}" class="card-poster" loading="lazy">
+${item._isNew ? '<span class="new-badge" aria-hidden="true">NEW</span>' : ''}
+<div class="rating-badge" aria-hidden="true">${rating} ★</div>
+<div class="card-overlay" aria-hidden="true">
+<div class="card-title">${t}</div>
+<div class="card-meta">${year}</div>
+${genres.length ? `<div class="genre-tags">${genres.map(g => `<span class="genre-tag">${esc(g)}</span>`).join('')}</div>` : ''}
+<div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+</div>
+${progress > 0 ? `<div class="progress-bar" aria-hidden="true"><div class="progress-bar-fill" style="width:${progress}%"></div></div>` : ''}
+<div class="card-trailer-preview" aria-hidden="true"></div>
+</button>
+<div class="card-actions">
+<button type="button" class="card-action-btn ${isFav ? 'favorited' : ''}" data-action="toggle-watchlist" data-stop-propagation="true" data-id="${id}" data-type="${type}" aria-label="${isFav ? 'Remove from watchlist' : 'Add to watchlist'}: ${t}">
+<svg viewBox="0 0 24 24" fill="${isFav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+</button>
+<button type="button" class="card-action-btn" data-action="share-content" data-stop-propagation="true" data-id="${id}" data-type="${type}" aria-label="Share: ${t}">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+</button>
+<button type="button" class="card-action-btn" data-action="add-to-diary" data-stop-propagation="true" data-id="${id}" data-type="${type}" aria-label="Add ${t} to diary">📖</button>
+</div>
 </div>`;
-}).join('');
+}
+function renderContentRowHTML(items) {
+if (!items.length) return '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:0.5rem">📭</div>Nothing here yet — try browsing a genre or mood</div>';
+const watchlist = Store.get('watchlist');
+const continueW = Store.get('continue_watching');
+return items.slice(0, 20).map(item => buildCardHTML(item, { watchlist, continueW })).join('');
+}
+function renderContentRow(containerId, items, append = false) {
+const c = document.getElementById(containerId);
+if (!c) return;
+if (!items.length) { c.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:0.5rem">📭</div>Nothing here yet — try browsing a genre or mood</div>'; c.setAttribute('aria-busy', 'false'); return; }
+const html = renderContentRowHTML(items);
+if (append) { c.insertAdjacentHTML('beforeend', html); } else { c.innerHTML = html; }
+c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 initHoverTrailerPreviews(c);
 observeImages(c);
 }
 
+// ============ SHARED TRAILER PREVIEW ============
+let sharedTrailerEl = null;
+function getSharedTrailer() {
+if (sharedTrailerEl) return sharedTrailerEl;
+const el = document.createElement('div');
+el.className = 'shared-trailer';
+el.setAttribute('aria-hidden', 'true');
+el.innerHTML = '<button class="shared-trailer-close" aria-label="Close trailer preview">✕</button><div class="shared-trailer-inner"></div>';
+document.body.appendChild(el);
+el.querySelector('.shared-trailer-close').addEventListener('click', () => hideSharedTrailer());
+sharedTrailerEl = el;
+return el;
+}
+function showSharedTrailer(card) {
+const el = getSharedTrailer();
+const rect = card.getBoundingClientRect();
+el.style.top = rect.bottom + 8 + 'px';
+el.style.left = Math.min(rect.left, window.innerWidth - 320) + 'px';
+el.style.width = '320px';
+const inner = el.querySelector('.shared-trailer-inner');
+const key = card._trailerKey;
+if (key) inner.innerHTML = `<iframe src="https://www.youtube.com/embed/${key}?autoplay=1&mute=1&controls=0&loop=1&playlist=${key}&start=15" allow="autoplay" frameborder="0" title="Trailer preview"></iframe>`;
+el.classList.add('active');
+}
+function hideSharedTrailer() { const el = getSharedTrailer(); el.classList.remove('active'); const inner = el.querySelector('.shared-trailer-inner'); inner.innerHTML = ''; }
+
 // ============ HOVER TRAILER PREVIEWS ============
+// P-03: trailer lookups are cached in a small module-level LRU keyed by
+// type:id — the old per-DOM-node cache was lost on every re-render, so the
+// same titles were re-fetched across a session.
+const trailerKeyCache = new Map();
+const TRAILER_CACHE_MAX = 60;
+function storeTrailerKey(type, id, key) {
+const k = `${type}:${id}`;
+trailerKeyCache.delete(k); trailerKeyCache.set(k, key);
+if (trailerKeyCache.size > TRAILER_CACHE_MAX) trailerKeyCache.delete(trailerKeyCache.keys().next().value);
+}
 function initHoverTrailerPreviews(container) {
 container.querySelectorAll('.content-card').forEach(card => {
+if (card.dataset.trailerWired) return; // L-11: append-mode re-ran this over the whole row, stacking duplicate listeners on old cards
+if (!card.dataset.type || card.dataset.id === undefined) return; // top10/similar cards have no preview wiring by design
+if (card.closest('.top10-card')) return;
+card.dataset.trailerWired = '1';
 const id = card.dataset.id;
 const type = card.dataset.type;
-const preview = card.querySelector('.card-trailer-preview');
-if (!preview) return;
 let timer;
 card.addEventListener('mouseenter', () => {
 timer = setTimeout(async () => {
-if (card._trailerKey === undefined) {
+let key = trailerKeyCache.get(`${type}:${id}`);
+if (key === undefined) {
 try {
 const v = await tmdb(`/${type === 'movie' ? 'movie' : 'tv'}/${id}/videos`);
 const t = (v.results || []).find(x => x.type === 'Trailer' && x.site === 'YouTube');
-card._trailerKey = t ? t.key : null;
-} catch { card._trailerKey = null; }
+key = t ? t.key : null;
+} catch { key = null; }
+storeTrailerKey(type, id, key);
 }
-if (!card._trailerKey) return;
-preview.innerHTML = `<iframe src="https://www.youtube.com/embed/${card._trailerKey}?autoplay=1&mute=1&controls=0&loop=1&playlist=${card._trailerKey}&start=15" allow="autoplay" frameborder="0" title="Trailer preview"></iframe>`;
-preview.classList.add('active');
+if (!key) return;
+card._trailerKey = key;
+showSharedTrailer(card);
 }, 900);
 });
-card.addEventListener('mouseleave', () => { clearTimeout(timer); preview.classList.remove('active'); preview.innerHTML = ''; });
+card.addEventListener('mouseleave', () => { clearTimeout(timer); hideSharedTrailer(); });
 });
 }
 
 // ============ DRAG SCROLL ============
+// P3-5: pointer events unify mouse + touch + pen so scroll rows respond to
+// horizontal swipes. .scroll-row uses touch-action: pan-y (see CSS), so
+// vertical pans scroll the page while horizontal drags move the row.
+// No pointer capture: capturing would retarget the compatibility click to
+// the row and break tapping the buttons inside each card.
 function initDragScroll(el) {
-let isDown = false, startX, scrollLeft;
-el.addEventListener('mousedown', e => { if (e.target.closest('.card-action-btn')) return; isDown = true; el.style.cursor = 'grabbing'; startX = e.pageX - el.offsetLeft; scrollLeft = el.scrollLeft; });
-el.addEventListener('mouseleave', () => { isDown = false; el.style.cursor = 'grab'; });
-el.addEventListener('mouseup', () => { isDown = false; el.style.cursor = 'grab'; });
-el.addEventListener('mousemove', e => { if (!isDown) return; e.preventDefault(); el.scrollLeft = scrollLeft - (e.pageX - el.offsetLeft - startX) * 1.5; });
+if (el._dragWired) return; // L-11: re-rendering a row used to stack duplicate pointer handlers
+el._dragWired = true;
+let isDown = false, startX, scrollLeft, moved = false;
+const onMove = e => {
+if (!isDown) return;
+const dx = (e.pageX - el.offsetLeft) - startX;
+if (Math.abs(dx) > 4) moved = true;
+e.preventDefault();
+el.scrollLeft = scrollLeft - dx * 1.5;
+};
+const onUp = () => { isDown = false; el.style.cursor = 'grab'; window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); };
+el.addEventListener('pointerdown', e => {
+if (e.pointerType === 'mouse' && e.button !== 0) return;
+isDown = true; moved = false;
+el.style.cursor = 'grabbing';
+startX = e.pageX - el.offsetLeft; scrollLeft = el.scrollLeft;
+window.addEventListener('pointermove', onMove);
+window.addEventListener('pointerup', onUp);
+window.addEventListener('pointercancel', onUp);
+});
+el.addEventListener('click', e => { if (moved) { e.preventDefault(); e.stopPropagation(); } }, true);
 }
 
 // ============ SCROLL ARROWS ============
@@ -542,36 +886,73 @@ section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ============ WATCHLIST ============
+// V-02: ids are normalized to strings and matched together with the media
+// type, so "550"/550 can't create duplicates and a movie/tv id clash can't
+// delete the wrong entry.
 function toggleWatchlist(id, type, title, poster) {
+id = String(id);
 const m = getCached(id, type);
 title  = title  !== undefined ? title  : m.title;
 poster = poster !== undefined ? poster : m.poster;
 let list = Store.get('watchlist');
-const idx = list.findIndex(w => w.id === id);
+const idx = list.findIndex(w => String(w.id) === id && w.type === type);
 if (idx > -1) { list.splice(idx, 1); toast('Removed from watchlist', 'info'); }
-else { list.unshift({ id, type, title, poster, addedAt: Date.now() }); toast('Added to watchlist ♥', 'success'); }
+else {
+// L-13: store the rating/year we already know at save-time — the watchlist
+// row used to fabricate 0 ratings and empty years for every entry.
+const m2 = getCached(id, type);
+list.unshift({ id, type, title, poster, addedAt: Date.now(), rating: m2.rating || 0, year: m2.year || '' });
+toast('Added to watchlist ♥', 'success');
+}
 Store.set('watchlist', list);
-renderWatchlist();
-document.querySelectorAll('.content-card').forEach(card => {
-if (parseInt(card.dataset.id) === id) {
+VoidStore.publish('watchlist:changed', list);
+document.querySelectorAll('.card-wrap').forEach(card => {
+const cc = card.querySelector('.content-card');
+if (cc && cc.dataset.id === id && cc.dataset.type === type) {
 const btn = card.querySelector('.card-action-btn');
-if (btn) { const isFav = list.some(w => w.id === id); btn.classList.toggle('favorited', isFav); const svg = btn.querySelector('svg'); if (svg) svg.setAttribute('fill', isFav ? 'currentColor' : 'none'); }
+if (btn) { const isFav = list.some(w => String(w.id) === id && w.type === type); btn.classList.toggle('favorited', isFav); const svg = btn.querySelector('svg'); if (svg) svg.setAttribute('fill', isFav ? 'currentColor' : 'none'); }
 }
 });
+// V-03: keep the detail-modal button in sync — it used to keep its old
+// label/state after toggling, inviting accidental removal on the next click.
+const modalBtn = document.getElementById('watchlistModalBtn');
+if (modalBtn && modalBtn.dataset.type === type && String(modalBtn.dataset.id) === id) {
+const isFav = list.some(w => String(w.id) === id && w.type === type);
+modalBtn.innerHTML = `${isFav ? '♥' : '♡'} WATCHLIST`;
+}
+}
+// ============ EMPTY STATES (P1-3) ============
+// U-03: personal sections stayed visible as permanent empty boxes on fresh
+// profiles — they now stay hidden entirely until they have content.
+function showEmptyState(sectionId, emptyId) {
+const section = document.getElementById(sectionId);
+if (section) section.style.display = 'none';
+}
+function hideEmptyState(sectionId, emptyId) {
+const section = document.getElementById(sectionId);
+const empty = document.getElementById(emptyId);
+if (empty) empty.hidden = true;
+const wrapper = section.querySelector('.scroll-row-wrapper');
+if (wrapper) wrapper.style.display = '';
+section.style.display = 'block';
 }
 async function renderWatchlist() {
 const list = Store.get('watchlist');
 const section = document.getElementById('myWatchlistSection');
-if (!list.length) { section.style.display = 'none'; return; }
+if (!list.length) { showEmptyState('myWatchlistSection', 'myWatchlistEmpty'); return; }
+hideEmptyState('myWatchlistSection', 'myWatchlistEmpty');
 section.style.display = 'block';
-const items = list.slice(0, 15).map(w => ({ id: w.id, media_type: w.type, title: w.title, name: w.title, poster_path: w.poster, genre_ids: [], vote_average: 0, release_date: '', first_air_date: '' }));
+// L-13: render from the save-time snapshot (rating/year) with graceful
+// fallbacks for entries saved before this fix.
+const items = list.slice(0, 15).map(w => ({ id: w.id, media_type: w.type, title: w.title, name: w.title, poster_path: w.poster, genre_ids: [], vote_average: w.rating || 0, release_date: w.year ? `${w.year}-01-01` : '', first_air_date: w.year ? `${w.year}-01-01` : '' }));
 renderContentRow('myWatchlist', items);
 }
 
 // ============ RECENTLY VIEWED ============
 function addRecentlyViewed(id, type, title, poster) {
+id = String(id); // V-02
 let list = Store.get('recently_viewed');
-list = list.filter(r => r.id !== id);
+list = list.filter(r => !(String(r.id) === id && r.type === type));
 list.unshift({ id, type, title, poster, viewedAt: Date.now() });
 if (list.length > 20) list = list.slice(0, 20);
 Store.set('recently_viewed', list);
@@ -580,15 +961,17 @@ renderRecentlyViewed();
 function renderRecentlyViewed() {
 const list = Store.get('recently_viewed');
 const section = document.getElementById('recentlyViewedSection');
-if (!list.length) { section.style.display = 'none'; return; }
+if (!list.length) { showEmptyState('recentlyViewedSection', 'recentlyViewedEmpty'); return; }
+hideEmptyState('recentlyViewedSection', 'recentlyViewedEmpty');
 section.style.display = 'block';
 renderContentRow('recentlyViewed', list.slice(0, 15).map(r => ({ id: r.id, media_type: r.type, title: r.title, name: r.title, poster_path: r.poster, genre_ids: [], vote_average: 0, release_date: '', first_air_date: '' })));
 }
 
 // ============ CONTINUE WATCHING ============
 function updateContinueWatching(id, type, title, poster, progress, season, episode) {
+id = String(id); // V-02
 let list = Store.get('continue_watching');
-list = list.filter(c => c.id !== id);
+list = list.filter(c => !(String(c.id) === id && c.type === type));
 if (progress > 0 && progress < 95) {
 list.unshift({ id, type, title, poster, progress, season: season || 1, episode: episode || 1, updatedAt: Date.now() });
 }
@@ -598,7 +981,8 @@ renderContinueWatching();
 function renderContinueWatching() {
 const list = Store.get('continue_watching');
 const section = document.getElementById('continueWatchingSection');
-if (!list.length) { section.style.display = 'none'; return; }
+if (!list.length) { showEmptyState('continueWatchingSection', 'continueWatchingEmpty'); return; }
+hideEmptyState('continueWatchingSection', 'continueWatchingEmpty');
 section.style.display = 'block';
 renderContentRow('continueWatching', list.map(c => ({ id: c.id, media_type: c.type, title: c.title, name: c.title, poster_path: c.poster, genre_ids: [], vote_average: 0, release_date: '', first_air_date: '', progress: c.progress })));
 }
@@ -619,10 +1003,16 @@ document.getElementById('aiRecReason').textContent = '✨ ' + reason;
 const seedIds = watched.slice(0, 3).map(w => w.id);
 const promises = seedIds.map(id => { const w = watched.find(x => x.id === id); return tmdbList(`/${w?.type || 'movie'}/${id}/recommendations`); });
 const results = await Promise.all(promises);
-const flat = results.flat();
-const seen = new Set(watched.map(w => w.id));
+// L-02: TMDB recommendation lists carry no media_type — tag each batch with
+// its seed's type instead of defaulting everything to 'movie'.
+const flat = [];
+results.forEach((batch, i) => {
+const seedType = watched.find(x => x.id === seedIds[i])?.type || 'movie';
+batch.forEach(item => flat.push({ item, type: seedType }));
+});
+const seen = new Set(watched.map(w => `${w.type}:${w.id}`));
 const unique = [];
-for (const item of flat) { if (!seen.has(item.id)) { seen.add(item.id); unique.push({ ...item, media_type: item.media_type || 'movie' }); } }
+for (const { item, type } of flat) { const k = `${type}:${item.id}`; if (!seen.has(k)) { seen.add(k); unique.push({ ...item, media_type: type }); } }
 if (unique.length) { document.getElementById('aiRecommendationsSection').style.display = 'block'; renderContentRow('aiRecommendations', unique.slice(0, 20)); }
 } catch (e) { loadRecommendations(); }
 }
@@ -632,78 +1022,64 @@ const seed = watched.slice(0, 3);
 if (!seed.length) return;
 try {
 const results = await Promise.all(seed.map(s => tmdbList(`/${s.type}/${s.id}/recommendations`)));
-const flat = results.flat();
+// L-02: per-seed type tagging — seeds can mix movies and TV, and stamping
+// every result with seed[0].type opened TV titles in the movie player.
+const flat = [];
+results.forEach((batch, i) => { batch.forEach(item => flat.push({ item, type: seed[i].type })); });
 const unique = []; const seen = new Set();
-for (const item of flat) { if (!seen.has(item.id)) { seen.add(item.id); unique.push({ ...item, media_type: item.media_type || seed[0].type }); } }
+for (const { item, type } of flat) { const k = `${type}:${item.id}`; if (!seen.has(k)) { seen.add(k); unique.push({ ...item, media_type: type }); } }
 if (unique.length) { document.getElementById('recommendationsSection').style.display = 'block'; renderContentRow('recommendations', unique.slice(0, 20)); }
 } catch (e) { console.error('Recommendations error', e); }
 }
 
-// ============ CONTENT LOADING ============
 async function loadContent() {
 ['trendingMovies', 'popularTV', 'topRated', 'nowPlaying', 'hiddenGems'].forEach(id => renderSkeletons(id, 10));
+// P-02: now_playing used to be fetched twice per home load (once for the row,
+// once more for New This Week). One promise now feeds both.
+const nowPlayingPromise = tmdbList('/movie/now_playing');
+const load = async (id, source, type) => {
 try {
-const [movies, tv, top, now, topWeek, hiddenMovies] = await Promise.all([
-tmdbList('/trending/movie/week'),
-tmdbList('/trending/tv/week'),
-tmdbList('/movie/top_rated'),
-tmdbList('/movie/now_playing'),
-tmdbList('/trending/all/week'),
-tmdbList('/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc')
-]);
-renderContentRow('trendingMovies', movies.map(m => ({ ...m, media_type: 'movie' })));
-renderContentRow('popularTV', tv.map(t => ({ ...t, media_type: 'tv' })));
-renderContentRow('topRated', top.map(m => ({ ...m, media_type: 'movie' })));
-renderContentRow('nowPlaying', now.map(m => ({ ...m, media_type: 'movie' })));
-renderContentRow('hiddenGems', hiddenMovies.map(m => ({ ...m, media_type: 'movie' })));
-renderTop10(topWeek);
-loadNewThisWeek();
-} catch (e) { toast('Failed to load content. Check your connection.', 'error'); }
+const items = await (typeof source === 'string' ? tmdbList(source) : source);
+renderContentRow(id, items.map(m => ({ ...m, media_type: m.media_type || type })), false);
+} catch (e) {
+renderSectionError(id, () => load(id, typeof source === 'string' ? source : tmdbList('/movie/now_playing'), type), e && e.message);
 }
-async function loadNewThisWeek() {
+};
+await Promise.all([
+load('trendingMovies', '/trending/movie/week', 'movie'),
+load('popularTV', '/trending/tv/week', 'tv'),
+load('topRated', '/movie/top_rated', 'movie'),
+load('nowPlaying', nowPlayingPromise, 'movie'),
+load('hiddenGems', '/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc', 'movie'),
+]);
+renderTop10(await tmdbList('/trending/all/week').catch(() => []));
+loadNewThisWeek(await nowPlayingPromise.catch(() => null));
+announce('Home feed loaded');
+}
+// Q-05: New This Week now renders through the shared card builder — its
+// hand-rolled template had silently lost the watchlist/share/diary actions.
+// P-02: accepts loadContent's now_playing response to skip the refetch.
+async function loadNewThisWeek(preloaded) {
 try {
-const data = await tmdbList('/movie/now_playing');
+const data = preloaded || await tmdbList('/movie/now_playing');
 const c = document.getElementById('newThisWeek');
 if (!c) return;
 renderSkeletons('newThisWeek', 8);
-c.innerHTML = data.slice(0, 15).map(item => {
-const id = item.id;
-const title = item.title || '';
-cacheMedia(id, 'movie', title, item.poster_path || '');
-const t = esc(title);
-const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
-const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
-return `<div class="content-card" role="listitem" tabindex="0" data-action="open-media" data-keyboard="true" data-id="${id}" data-type="movie">
-  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" alt="${t}" class="card-poster" loading="lazy" data-action="img-fallback" data-fallback-bg="#222" aria-hidden="true">
-  <span class="new-badge" aria-hidden="true">NEW</span>
-  <div class="rating-badge" aria-hidden="true">${rating}</div>
-  <div class="card-overlay" aria-hidden="true"><div class="card-title">${t}</div><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div></div>
-  <div class="card-trailer-preview" aria-hidden="true"></div>
-</div>`;
-}).join('');
+const watchlist = Store.get('watchlist'), continueW = Store.get('continue_watching');
+c.innerHTML = data.slice(0, 15).map(item => buildCardHTML({ ...item, media_type: 'movie', _isNew: true }, { watchlist, continueW })).join('');
+c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 initHoverTrailerPreviews(c);
 observeImages(c);
-} catch (e) { }
+} catch (e) { renderSectionError('newThisWeek', () => loadNewThisWeek()); }
 }
 function renderTop10(items) {
 const c = document.getElementById('top10Row');
 if (!c) return;
-c.innerHTML = items.slice(0, 10).map((item, i) => {
-const id = item.id;
-const type = item.media_type || 'movie';
-const title = item.title || item.name || '';
-cacheMedia(id, type, title, item.poster_path || '');
-const t = esc(title);
-const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
-const posterSm = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
-const rating = item.vote_average ? item.vote_average.toFixed(1) : '';
-return `<div class="top10-card" role="listitem" data-action="open-media" data-keyboard="true" data-id="${id}" data-type="${type}" tabindex="0" aria-label="#${i + 1} ${t}">
-  <div class="top10-number" aria-hidden="true">${i + 1}</div>
-  <img class="top10-poster" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="130px" alt="${t}" loading="lazy">
-  <div class="top10-info"><div class="top10-title">${t}</div><div class="top10-meta">${rating ? rating + ' ★' : ''}</div></div>
-</div>`;
-}).join('');
+if (!items.length) { c.innerHTML = '<div style="padding:1rem;color:var(--text-muted);white-space:nowrap">No data</div>'; return; }
+// Q-05: ranked layout comes from the shared builder's top10 branch.
+c.innerHTML = items.slice(0, 10).map((item, i) => buildCardHTML(item, { top10: true, rank: i + 1 })).join('');
+c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 observeImages(c);
 }
@@ -711,19 +1087,27 @@ observeImages(c);
 // ============ SHARE ============
 function shareContent(id, type, title) {
 title = title !== undefined ? title : getCached(id, type).title;
-const url = `${window.location.origin}${window.location.pathname}?type=${type}&id=${id}`;
-if (navigator.share) { navigator.share({ title: `Watch ${title} on VOID`, url }).catch(() => {}); }
-else if (navigator.clipboard) { navigator.clipboard.writeText(url).then(() => toast('Link copied!', 'success')).catch(() => toast('Failed to copy', 'error')); }
-else { toast('Copy not supported on this browser', 'warning'); }
+// S-05: share/copy must emit a full URL — a bare "?type=…" fragment only
+// resolves when pasted onto the exact same deployment path.
+const url = `${location.origin}${location.pathname}?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`;
+const copy = () => {
+if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Link copied!', 'success')).catch(() => toast('Failed to copy', 'error'));
+else toast('Copy not supported on this browser', 'warning');
+};
+// U-09: a rejected navigator.share used to disappear silently — fall back to
+// the clipboard so the user always ends up with a usable link.
+if (navigator.share) navigator.share({ title: `Watch ${title} on VOID`, url }).then(() => toast('Shared!', 'success')).catch(copy);
+else copy();
 }
 
 // ============ WATCH DIARY ============
 function addToDiary(id, type, title, poster, rating = 0) {
+id = String(id); // V-02
 const m = getCached(id, type);
 title  = title  !== undefined ? title  : m.title;
 poster = poster !== undefined ? poster : m.poster;
 let diary = Store.get('watch_diary', []);
-const exists = diary.find(e => e.id === id);
+const exists = diary.find(e => String(e.id) === String(id) && e.type === type); // V-02: type-aware
 if (exists) { toast('Already in your diary', 'info'); return; }
 diary.unshift({ id, type, title, poster, rating, date: new Date().toISOString().split('T')[0], watchedAt: Date.now() });
 Store.set('watch_diary', diary);
@@ -767,8 +1151,9 @@ entriesEl.innerHTML = diary.slice(0, 30).map(e => `<div class="diary-entry">
 </div>`).join('') || '<div style="color:var(--text-muted);padding:1rem;text-align:center">No entries yet. Start watching to build your diary.</div>';
 }
 function removeDiaryEntry(id) {
+const sid = String(id); // V-02
 let diary = Store.get('watch_diary', []);
-diary = diary.filter(e => e.id !== id);
+diary = diary.filter(e => String(e.id) !== sid);
 Store.set('watch_diary', diary);
 renderDiary();
 }
@@ -776,7 +1161,9 @@ function exportDiary() {
 const diary = Store.get('watch_diary', []);
 const csv = ['Title,Type,Date,Rating'].concat(diary.map(e => `"${(e.title || '').replace(/"/g, '""')}",${e.type},${e.date},${e.rating || ''}`)).join('\n');
 const blob = new Blob([csv], { type: 'text/csv' });
-const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'void_diary.csv'; a.click();
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a'); a.href = url; a.download = 'void_diary.csv'; a.click();
+setTimeout(() => URL.revokeObjectURL(url), 1000); // L-16: object URLs were leaked for the page's lifetime
 }
 
 // ============ AI CHAT CONCIERGE ============
@@ -827,6 +1214,9 @@ if (!msg) return;
 input.value = '';
 addAIMessage('user', msg);
 state.aiChatHistory.push({ role: 'user', content: msg });
+// L-12: cap the session history so it cannot grow unbounded across a chat.
+while (state.aiChatHistory.length > 24) state.aiChatHistory.shift();
+while (state.aiChatHistory.length && state.aiChatHistory[0].role !== 'user') state.aiChatHistory.shift();
 const msgs = document.getElementById('aiChatMessages');
 const typing = document.createElement('div');
 typing.className = 'ai-msg ai';
@@ -854,6 +1244,9 @@ if (found) mediaCards.push({ id: found.id, type: found.media_type, title: found.
 addAIMessage('ai', cleanReply || reply, mediaCards);
 } catch (e) {
 typing.remove();
+// L-12: pop the unanswered user turn so the history keeps strict message
+// alternation instead of sending two consecutive user turns next time.
+if (state.aiChatHistory.length && state.aiChatHistory[state.aiChatHistory.length - 1].role === 'user') state.aiChatHistory.pop();
 addAIMessage('ai', "Sorry, I couldn't connect right now. Try again in a moment.");
 }
 }
@@ -868,14 +1261,14 @@ function dataNum(el, key) { const v = el.dataset[key]; const n = parseInt(v, 10)
 function dataStr(el, key) { return el.dataset[key] !== undefined ? el.dataset[key] : ''; }
 const ACTION_HANDLERS = {
 'open-media'(el) { window.openMedia(dataNum(el, 'id'), dataStr(el, 'type')); },
-'open-media-then-close'(el) { window.closeModal(); setTimeout(() => window.openMedia(dataNum(el, 'id'), dataStr(el, 'type')), 400); },
+'open-media-then-close'(el) { window.openMedia(dataNum(el, 'id'), dataStr(el, 'type')); }, // U-05: switching titles keeps the modal open and pushes its own history entry
 'toggle-watchlist'(el) { window.toggleWatchlist(dataNum(el, 'id'), dataStr(el, 'type')); },
 'share-content'(el) { window.shareContent(dataNum(el, 'id'), dataStr(el, 'type')); },
 'add-to-diary'(el) { window.addToDiary(dataNum(el, 'id'), dataStr(el, 'type')); },
 'play-media'() { window.playMedia(); },
 'resume-media'(el) { state.season = parseInt(el.dataset.season, 10) || 1; state.episode = parseInt(el.dataset.episode, 10) || 1; window.playMedia(); },
 'open-trailer'() { window.openTrailer(); },
-'toggle-mini-player'() { window.toggleMiniPlayer(); },
+'toggle-mini-player'() { window.toggleMiniPlayer(); const t = document.getElementById('theaterOverlay'); if (t?.classList.contains('active')) closeTheater(); },
 'close-modal'() { window.closeModal(); },
 'play-episode'(el) { window.playEpisode(parseInt(el.dataset.ep, 10)); },
 'load-episodes'(el) { window.loadEpisodes(parseInt(el.dataset.tvId, 10), parseInt(el.dataset.season, 10)); },
@@ -884,9 +1277,9 @@ const ACTION_HANDLERS = {
 'delete-review'() { window.deleteReview(); },
 'delete-custom-list'(el) { window.deleteCustomList(parseInt(el.dataset.id, 10)); },
 'toggle-item-in-list'(el) { window.toggleItemInList(parseInt(el.dataset.id, 10)); },
-'new-list-from-dropdown'() { document.getElementById('addToListDropdown').style.display = 'none'; document.getElementById('createListModal').classList.add('active'); },
+'new-list-from-dropdown'() { document.getElementById('addToListDropdown').style.display = 'none'; openOverlay(document.getElementById('createListModal'), '#listNameInput'); },
 'select-profile'(el) { window.selectProfile(parseInt(el.dataset.id, 10)); },
-'add-profile-overlay'() { document.getElementById('profileOverlay').classList.remove('active'); document.getElementById('profileManagerModal').classList.add('active'); window.renderProfileManager(); },
+'add-profile-overlay'() { closeOverlay(document.getElementById('profileOverlay')); openOverlay(document.getElementById('profileManagerModal'), 'button'); window.renderProfileManager(); },
 'select-avatar'(el) { window.selectAvatar(el.dataset.avatar); },
 'toggle-selected'(el) { el.classList.toggle('selected'); el.setAttribute('aria-checked', el.classList.contains('selected') ? 'true' : 'false'); },
 'edit-profile'(el) { window.editProfile(parseInt(el.dataset.id, 10)); },
@@ -895,12 +1288,40 @@ const ACTION_HANDLERS = {
 'install-pwa'() { window.installPWA(); },
 'dismiss-pwa'(el) { const banner = el.closest('.pwa-banner'); window.dismissPWA(banner); },
 'go-to-banner'(el) { window.goToBanner(parseInt(el.dataset.index, 10)); },
+'retry-banner'() { initBanner(); },
 'select-genre'(el) { window.selectGenre(parseInt(el.dataset.id, 10), el.dataset.name); },
 'select-mood'(el) { window.selectMood(el.dataset.mood); },
 'send-ai-suggestion'(el) { document.getElementById('aiChatInput').value = el.dataset.msg; window.sendAIMessage(); },
 'toast-close'(el) { el.closest('.toast')?.remove(); },
 'reload-page'() { window.location.reload(); },
-'close-dmca'() { document.getElementById('dmcaModal').classList.remove('active'); },
+'close-dmca'() { closeOverlay(document.getElementById('dmcaModal')); },
+'load-more'(el) {
+const rowId = el.dataset.row;
+const page = parseInt(el.dataset.page, 10) || 2;
+const endpoint = el.dataset.endpoint;
+if (!rowId || !endpoint) return;
+el.dataset.page = page;
+el.textContent = 'Loading…';
+el.disabled = true;
+tmdbList(`${endpoint}?page=${page}`).then(items => {
+const isTv = endpoint.includes('/tv/');
+const newItems = items.map(m => ({ ...m, media_type: m.media_type || (isTv ? 'tv' : 'movie') }));
+renderContentRow(rowId, newItems, true);
+el.textContent = 'MORE';
+el.disabled = false;
+announce(`Loaded ${newItems.length} more items`);
+}).catch(() => {
+el.textContent = 'MORE';
+el.disabled = false;
+toast('Failed to load more', 'error');
+});
+},
+'retry-section'(el) {
+const id = el.dataset.target;
+const fn = SECTION_RETRY[id];
+el.disabled = true; el.textContent = 'Loading…';
+Promise.resolve(fn ? fn() : Promise.resolve()).catch(() => {}).finally(() => { if (el.isConnected) { el.disabled = false; el.textContent = 'RETRY'; } });
+},
 };
 function initEventDelegation() {
 // Click delegation: find the closest [data-action] ancestor of the click target.
@@ -930,7 +1351,11 @@ if (handler) handler(el);
 // Delegated image-error fallback (replaces inline onerror="this.style.background=...").
 document.addEventListener('error', (e) => {
 const img = e.target;
-if (!img || img.tagName !== 'IMG' || !img.dataset.imgFallback) return;
+if (!img || img.tagName !== 'IMG') return;
+// Two tag styles exist in templates: data-action="img-fallback" and the bare
+// boolean data-img-fallback (dataset value "" is falsy, so hasAttribute is required).
+const tagged = img.dataset.action === 'img-fallback' || img.hasAttribute('data-img-fallback');
+if (!tagged) return;
 if (img.dataset.fallbackBg) img.style.background = img.dataset.fallbackBg;
 if (img.dataset.fallbackHide === 'true') img.style.display = 'none';
 }, true);
@@ -957,21 +1382,28 @@ document.addEventListener('DOMContentLoaded', () => {
   try { ErrorMonitor.init(); } catch (e) { console.error('ErrorMonitor init failed', e); }
   try {
     initEventDelegation();
+    initLiveRegions();
+    initTopProgress();
+    initOfflineIndicator();
     initTheme();
     initNavbar();
     initSearch();
-    initGenres();
-    initFilters();
-    initScrollArrows();
-    initBanner();
-    initMoodBar();
-    loadContent();
-    renderWatchlist();
-    renderRecentlyViewed();
-    renderContinueWatching();
-    loadAIRecommendations();
+initGenres();
+initFilters();
+initScrollArrows();
+initPullToRefresh();
+initBanner();
+initMoodBar();
+migrateMediaIds(); // V-02: normalize stored ids before anything reads them
+loadContent();
+renderWatchlist();
+renderRecentlyViewed();
+renderContinueWatching();
+VoidStore.subscribe('watchlist:changed', renderWatchlist);
+loadAIRecommendations();
     initModal();
     initMiniPlayer();
+    initTheater();
     initKeyboardShortcuts();
     initScrollAnimations();
     initParallax();
@@ -983,10 +1415,20 @@ document.addEventListener('DOMContentLoaded', () => {
     renderDiary();
     initDiaryExport();
     initPWA();
-    document.getElementById('dmcaLink')?.addEventListener('click', (e) => { e.preventDefault(); document.getElementById('dmcaModal').classList.add('active'); });
+    document.getElementById('dmcaLink')?.addEventListener('click', (e) => { e.preventDefault(); openOverlay(document.getElementById('dmcaModal'), 'button'); });
     document.getElementById('refreshRecsBtn')?.addEventListener('click', loadAIRecommendations);
     const params = new URLSearchParams(window.location.search);
     if (params.get('id') && params.get('type')) openMedia(params.get('id'), params.get('type'));
+    else routeFromHash();
+    // F-04: the manifest advertises ?section= shortcuts and a /share share_target
+    // — both had no handlers anywhere. Section shortcuts scroll to their row;
+    // shared text/urls land in the search box.
+    const sectionParam = params.get('section');
+    if (sectionParam) scrollToSection(sectionParam);
+    if (window.location.pathname.replace(/\/+$/, '').endsWith('/share')) {
+      const shared = params.get('text') || params.get('title') || params.get('url') || '';
+      if (shared) { const si = document.getElementById('searchInput'); si.value = shared; searchMedia(shared); toast('Searching shared content…', 'info'); }
+    }
     initPerformanceOptimizations();
   } catch (e) {
     console.error('[BOOT] Init failed', e);
@@ -999,11 +1441,65 @@ function initNavbar() {
 const navbar = document.getElementById('navbar');
 const hamburger = document.getElementById('hamburger');
 const mobileMenu = document.getElementById('mobileMenu');
+const menuBackdrop = document.getElementById('menuBackdrop');
+const openMenu = () => { openOverlay(mobileMenu, '.mobile-menu-links a'); menuBackdrop.classList.add('active'); hamburger.setAttribute('aria-expanded', 'true'); };
+const closeMenu = () => { closeOverlay(mobileMenu); menuBackdrop.classList.remove('active'); hamburger.setAttribute('aria-expanded', 'false'); };
 window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 50));
-hamburger.addEventListener('click', () => { const open = mobileMenu.classList.toggle('active'); hamburger.setAttribute('aria-expanded', open); });
-mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => { mobileMenu.classList.remove('active'); hamburger.setAttribute('aria-expanded', 'false'); }));
-document.getElementById('profileAvatarBtn').addEventListener('keypress', e => { if (e.key === 'Enter') showProfileOverlay(); });
+hamburger.addEventListener('click', () => { if (mobileMenu.classList.contains('active')) closeMenu(); else openMenu(); });
+menuBackdrop.addEventListener('click', closeMenu);
+document.getElementById('mobileMenuClose').addEventListener('click', closeMenu);
+mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
 document.getElementById('profileAvatarBtn').addEventListener('click', showProfileOverlay);
+// U-01: profileAvatarBtn is a real <button> now — Enter/Space fire click
+// natively, so the old keypress-Enter companion handler (which double-fired)
+// is gone.
+}
+
+// ============ PULL-TO-REFRESH (P3-6) ============
+// Touch-only: pulling down at the top of the page reveals a spinner and
+// reloads the home feed. Vertical page scroll is untouched (touchmove is
+// passive); we just read the gesture to drive the indicator.
+function initPullToRefresh() {
+if (!('ontouchstart' in window) || !window.matchMedia('(pointer: coarse)').matches) return;
+let startY = 0, pulling = false, dist = 0;
+const ptr = document.createElement('div');
+ptr.className = 'ptr-indicator';
+ptr.setAttribute('aria-hidden', 'true');
+ptr.innerHTML = '<span class="ptr-spinner"></span><span class="ptr-text">Pull to refresh</span>';
+document.body.appendChild(ptr);
+const threshold = ptr.offsetHeight || 64;
+const setState = (label) => { ptr.querySelector('.ptr-text').textContent = label; ptr.classList.toggle('ready', label === 'Release to refresh'); };
+window.addEventListener('touchstart', e => {
+if (window.scrollY <= 0) { startY = e.touches[0].clientY; pulling = true; dist = 0; }
+}, { passive: true });
+window.addEventListener('touchmove', e => {
+if (!pulling) return;
+const dy = e.touches[0].clientY - startY;
+if (dy <= 0) { dist = 0; ptr.classList.remove('active'); return; }
+dist = Math.min(dy, threshold + 40);
+ptr.classList.add('active');
+ptr.style.transform = `translateY(${dist - threshold}px)`;
+setState(dist >= threshold ? 'Release to refresh' : 'Pull to refresh');
+}, { passive: true });
+window.addEventListener('touchend', () => {
+if (!pulling) return;
+pulling = false;
+ptr.classList.remove('active');
+ptr.style.transform = '';
+if (dist >= threshold) refreshHome();
+});
+}
+function refreshHome() {
+toast('Refreshing…', 'info');
+initBanner();
+loadContent();
+renderWatchlist();
+renderRecentlyViewed();
+renderContinueWatching();
+renderDiary();
+loadAIRecommendations();
+announce('Feed refreshed');
+toast('Refreshed', 'success');
 }
 
 // ============ DETAIL MODAL ============
@@ -1027,8 +1523,57 @@ document.getElementById('nextEpCancelBtn')?.addEventListener('click', () => { cl
 initReviews();
 initAddToList();
 }
+// ============ V-02 MIGRATION ============
+// One-time normalization of stored media ids to strings. Fixes data written
+// before the fix (deep links stored "550", card clicks stored 550) and drops
+// the duplicate entries that mismatched ids created, keeping the newest.
+function migrateMediaIds() {
+const fixList = key => {
+let arr = Store.get(key, []);
+if (!Array.isArray(arr) || !arr.length) return;
+let changed = false;
+const seen = new Set();
+const out = [];
+arr.forEach(it => {
+if (!it || it.id === undefined || it.id === null) { out.push(it); return; }
+const sid = String(it.id);
+if (sid !== it.id) changed = true;
+const dk = sid + '|' + (it.type || it.media_type || '');
+if (seen.has(dk)) { changed = true; return; } // duplicate from the old bug
+seen.add(dk);
+it.id = sid;
+out.push(it);
+});
+if (changed) Store.set(key, out);
+};
+['watchlist', 'recently_viewed', 'watch_diary', 'continue_watching'].forEach(fixList);
+const lists = Store.get('custom_lists', []);
+let lChanged = false;
+lists.forEach(l => {
+if (!Array.isArray(l.items)) return;
+const seen = new Set();
+const out = [];
+l.items.forEach(it => {
+if (!it || it.id === undefined || it.id === null) { out.push(it); return; }
+const sid = String(it.id);
+if (sid !== it.id) lChanged = true;
+const dk = sid + '|' + (it.media_type || '');
+if (seen.has(dk)) { lChanged = true; return; }
+seen.add(dk);
+it.id = sid;
+out.push(it);
+});
+l.items = out;
+});
+if (lChanged) Store.set('custom_lists', lists);
+}
+
 async function openMedia(id, type) {
+id = String(id); // V-02 choke point: every media id is a string from here on,
+// so deep links ("550") and card clicks (550) can never diverge again
+const seq = ++state.openSeq; // L-05: each open gets a token; stale responses are discarded
 state.mediaId = id; state.mediaType = type;
+setRoute(id, type);
 const modal = document.getElementById('detailModal');
 modal.classList.add('active');
 document.body.style.overflow = 'hidden';
@@ -1042,6 +1587,14 @@ document.getElementById('tabOverview').classList.add('active');
 document.getElementById('episodesTab').style.display = type === 'tv' ? 'block' : 'none';
 document.getElementById('playerSection').style.display = 'none';
 clearNextEpTimer();
+const overviewEl = document.getElementById('modalOverview');
+const extraEl = document.getElementById('modalExtraInfo');
+const castEl = document.getElementById('castGrid');
+const similarEl = document.getElementById('similarGrid');
+if (overviewEl) overviewEl.innerHTML = '<div class="skeleton" style="height:60px;width:80%;margin-bottom:1rem"></div><div class="skeleton" style="height:14px;width:100%;margin-bottom:0.5rem"></div><div class="skeleton" style="height:14px;width:90%;margin-bottom:0.5rem"></div><div class="skeleton" style="height:14px;width:60%"></div>';
+if (extraEl) extraEl.innerHTML = Array(4).fill('<div class="skeleton" style="height:40px;width:100%;margin-bottom:0.75rem"></div>').join('');
+if (castEl) castEl.innerHTML = Array(8).fill('<div class="skeleton" style="width:80px;height:80px;border-radius:50%"></div>').join('');
+if (similarEl) similarEl.innerHTML = Array(6).fill('<div class="skeleton" style="width:140px;height:180px;border-radius:var(--radius)"></div>').join('');
 try {
 const endpoint = type === 'movie' ? 'movie' : 'tv';
 const [details, credits, similar, videos] = await Promise.all([
@@ -1050,8 +1603,11 @@ tmdb(`/${endpoint}/${id}/credits`).catch(() => ({ cast: [] })),
 tmdbList(`/${endpoint}/${id}/similar`).catch(() => []),
 tmdb(`/${endpoint}/${id}/videos`).catch(() => ({ results: [] }))
 ]);
+if (seq !== state.openSeq) return; // L-05: a newer openMedia superseded this one — drop the stale render
 state.currentDetails = details;
-cacheMedia(id, type, details.title || details.name || '', details.poster_path || '');
+// L-13: carry the details' year/rating into the media cache so watchlist adds
+// from the modal save an accurate snapshot too.
+cacheMedia(id, type, details.title || details.name || '', details.poster_path || '', { year: (details.release_date || details.first_air_date || '').split('-')[0], rating: details.vote_average || 0 });
 displayDetails(details, type);
 updateSEO(details.title || details.name, details.overview, type, `${IMG}${details.poster_path}`);
 injectSchema(details, type);
@@ -1062,7 +1618,13 @@ state.currentTrailerKey = trailer ? trailer.key : null;
 if (type === 'tv') loadTVSeasons(id, details);
 addRecentlyViewed(id, type, details.title || details.name, details.poster_path);
 initReviews();
-} catch (e) { toast('Failed to load details', 'error'); }
+} catch (e) { if (seq === state.openSeq) toast('Failed to load details', 'error'); }
+}
+// L-14: budgets under $1M used to render as "$0M" — compact, honest units.
+function formatMoney(n) {
+if (!n || n <= 0) return '';
+if (n < 1e6) return '$' + new Intl.NumberFormat('en-US').format(n);
+return '$' + new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 function displayDetails(d, type) {
 const title = d.title || d.name;
@@ -1085,7 +1647,7 @@ meta += `<span>${rating} ★</span>`;
 if (d.status) meta += `<span>${d.status}</span>`;
 document.getElementById('modalMeta').innerHTML = meta;
 const watchlist = Store.get('watchlist');
-const isFav = watchlist.some(w => w.id === d.id);
+const isFav = watchlist.some(w => String(w.id) === String(d.id) && w.type === type); // V-02
 document.getElementById('modalActions').innerHTML = `
     <button class="btn btn-primary btn-sm" data-action="play-media">▶ PLAY</button>
     ${state.currentTrailerKey ? `<button class="btn btn-outline btn-sm" data-action="open-trailer">🎬 TRAILER</button>` : ''}
@@ -1098,8 +1660,8 @@ document.getElementById('modalGenres').innerHTML = (d.genres || []).map(g => `<s
 document.getElementById('modalOverview').textContent = d.overview || 'No overview available.';
 let extra = '';
 if (type === 'movie') {
-if (d.budget) extra += `<div class="info-item"><span class="info-label">BUDGET</span>$${(d.budget / 1e6).toFixed(0)}M</div>`;
-if (d.revenue) extra += `<div class="info-item"><span class="info-label">REVENUE</span>$${(d.revenue / 1e6).toFixed(0)}M</div>`;
+if (d.budget) extra += `<div class="info-item"><span class="info-label">BUDGET</span>${formatMoney(d.budget)}</div>`;
+if (d.revenue) extra += `<div class="info-item"><span class="info-label">REVENUE</span>${formatMoney(d.revenue)}</div>`;
 if (d.production_companies?.length) extra += `<div class="info-item"><span class="info-label">STUDIO</span>${esc(d.production_companies[0].name)}</div>`;
 } else {
 if (d.networks?.length) extra += `<div class="info-item"><span class="info-label">NETWORK</span>${esc(d.networks[0].name)}</div>`;
@@ -1112,7 +1674,7 @@ document.getElementById('modalExtraInfo').innerHTML = extra;
 function displayCast(cast) {
 document.getElementById('castGrid').innerHTML = cast.slice(0, 20).map(p => {
 const photo = p.profile_path ? `${IMG_FACE}${p.profile_path}` : '';
-return `<div class="cast-card" role="listitem"><img class="cast-photo" src="${esc(photo)}" alt="${esc(p.name)}" loading="lazy" data-action="img-fallback" data-fallback-bg="#222"><div class="cast-name">${esc(p.name)}</div><div class="cast-character">${esc(p.character || '')}</div></div>`;
+return `<div class="cast-card" role="listitem"><img class="cast-photo" src="${esc(photo)}" alt="Photo of ${esc(p.name)}" loading="lazy" data-action="img-fallback" data-fallback-bg="#222"><div class="cast-name">${esc(p.name)}</div><div class="cast-character">${esc(p.character || '')}</div></div>`;
 }).join('') || '<p style="color:var(--text-muted)">No cast information available.</p>';
 }
 function displaySimilar(items, parentType) {
@@ -1122,15 +1684,15 @@ grid.innerHTML = mapped.map(item => {
 const id = item.id;
 const type = item.media_type;
 const title = item.title || item.name || '';
-cacheMedia(id, type, title, item.poster_path || '');
+cacheMedia(id, type, title, item.poster_path || '', { year: (item.release_date || item.first_air_date || '').split('-')[0], rating: item.vote_average || 0 }); // L-13
 const t = esc(title);
 const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
-return `<div class="content-card" data-action="open-media-then-close" data-keyboard="true" data-id="${id}" data-type="${type}" style="flex:0 0 130px" tabindex="0">
-  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" alt="${t}" class="card-poster" style="height:195px" loading="lazy" data-action="img-fallback" data-fallback-bg="#222">
+return `<button type="button" class="content-card" data-action="open-media-then-close" data-id="${id}" data-type="${type}" style="flex:0 0 130px" aria-label="${t} — ${type === 'movie' ? 'movie' : 'TV show'}">
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" alt="${t} — ${type === 'movie' ? 'movie' : 'TV show'} poster" class="card-poster" style="height:195px" loading="lazy" data-action="img-fallback" data-fallback-bg="#222">
   <div class="rating-badge">${rating} ★</div>
   <div class="card-overlay"><div class="card-title">${t}</div><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg></div></div>
-</div>`;
+</button>`;
 }).join('') || '<p style="color:var(--text-muted)">No similar content found.</p>';
 observeImages(grid);
 }
@@ -1164,9 +1726,9 @@ const still = ep.still_path ? `${IMG_SM}${ep.still_path}` : '';
 const isActive = cw && cw.season == seasonNum && cw.episode == ep.episode_number;
 const prog = epProgress[`s${seasonNum}e${ep.episode_number}`] || 0;
 const isWatched = prog >= 90;
-return `<div class="episode-item ${isActive ? 'active-ep' : ''} ${isWatched ? 'watched-ep' : ''}" role="listitem" data-action="play-episode" data-ep="${ep.episode_number}">
+return `<button type="button" class="episode-item ${isActive ? 'active-ep' : ''} ${isWatched ? 'watched-ep' : ''}" data-action="play-episode" data-ep="${ep.episode_number}" aria-label="Play episode ${ep.episode_number}${ep.name ? ': ' + esc(ep.name) : ''}">
   <div style="position:relative;flex-shrink:0">
-    <img class="episode-still" src="${esc(still)}" alt="Episode ${ep.episode_number}" loading="lazy" data-img-fallback data-fallback-bg="#222">
+    <img class="episode-still" src="${esc(still)}" alt="Episode ${ep.episode_number} still" loading="lazy" data-img-fallback data-fallback-bg="#222">
     ${prog > 0 && !isWatched ? `<div class="episode-still-progress"><div class="episode-still-progress-fill" style="width:${prog}%"></div></div>` : ''}
   </div>
   <div class="episode-info">
@@ -1174,7 +1736,7 @@ return `<div class="episode-item ${isActive ? 'active-ep' : ''} ${isWatched ? 'w
     <div class="episode-name">${esc(ep.name)}</div>
     <div class="episode-overview">${esc(ep.overview || '')}</div>
   </div>
-</div>`;
+</button>`;
 }).join('');
 } catch (e) { list.innerHTML = '<p style="color:var(--text-muted)">Failed to load episodes</p>'; }
 }
@@ -1187,10 +1749,13 @@ document.getElementById('nextEpOverlay').style.display = 'none';
 let url;
 const title = state.currentDetails?.title || state.currentDetails?.name || '';
 const poster = state.currentDetails?.poster_path || '';
+// L-04: snapshot the playback context so progress keeps saving even after
+// closeModal() nulls state.currentDetails (mini-player watching).
+state.playbackSession = { id: String(state.mediaId), type: state.mediaType, title, poster, season: state.season || 1, episode: state.episode || 1 };
 if (state.mediaType === 'movie') {
 url = `${VIDKING}/movie/${state.mediaId}?color=${VK_COLOR}&autoPlay=true`;
 // P1: preserve existing movie progress instead of resetting to 5%
-const existing = Store.get('continue_watching').find(c => c.id == state.mediaId);
+const existing = Store.get('continue_watching').find(c => String(c.id) === String(state.mediaId) && c.type === 'movie'); // V-02
 if (!existing) updateContinueWatching(state.mediaId, 'movie', title, poster, 5);
 } else {
 url = `${VIDKING}/tv/${state.mediaId}/${state.season}/${state.episode}?color=${VK_COLOR}&autoPlay=true`;
@@ -1201,7 +1766,64 @@ updateContinueWatching(state.mediaId, 'tv', title, poster, 5, state.season, stat
 scheduleNextEp();
 }
 document.getElementById('videoPlayer').src = url;
-section.scrollIntoView({ behavior: 'smooth' });
+openTheater();
+}
+// ============ THEATER PLAYER ============
+// Centered cinema-mode overlay that owns the player section (moved out of the
+// detail modal). PLAY transfers playback here; MINI pops it to the corner PiP.
+function initTheater() {
+const overlay = document.getElementById('theaterOverlay');
+if (!overlay) return;
+document.getElementById('theaterCloseBtn').addEventListener('click', closeTheater);
+document.getElementById('theaterDetailsBtn').addEventListener('click', closeTheater);
+overlay.querySelector('.theater-backdrop')?.addEventListener('click', closeTheater);
+document.getElementById('theaterFsBtn').addEventListener('click', toggleTheaterFullscreen);
+}
+function openTheater() {
+const overlay = document.getElementById('theaterOverlay');
+const d = state.currentDetails || {};
+document.getElementById('theaterTitle').textContent = d.title || d.name || 'Now Playing';
+const year = (d.release_date || d.first_air_date || '').split('-')[0];
+document.getElementById('theaterMeta').textContent =
+[year, state.mediaType === 'movie' ? 'Movie' : `TV · S${state.season}E${state.episode}`].filter(Boolean).join(' · ');
+const idle = document.getElementById('theaterIdle');
+if (idle) idle.style.display = 'none';
+overlay.classList.add('active');
+// Add .visible synchronously — rAF can starve in background tabs and leave
+// the overlay transparent (but still click-blocking) forever.
+overlay.classList.add('visible');
+const wrap = overlay.querySelector('.theater-stage-wrap');
+trapFocus(wrap);
+document.body.style.overflow = 'hidden';
+setTimeout(() => { try { document.getElementById('theaterCloseBtn').focus(); } catch (e) {} }, 50);
+}
+function closeTheater() {
+const overlay = document.getElementById('theaterOverlay');
+if (!overlay || !overlay.classList.contains('active')) return;
+releaseFocus(overlay.querySelector('.theater-stage-wrap'));
+overlay.classList.remove('visible');
+clearNextEpTimer();
+// L-03: flush one final progress write when playback ends — the throttled
+// timeupdate path used to lose up to 15s of progress at stop.
+if (state.playbackSession && state._lastProgress > 0) {
+const s = state.playbackSession;
+updateContinueWatching(s.id, s.type, s.title, s.poster, state._lastProgress, s.season, s.episode);
+}
+setTimeout(() => {
+overlay.classList.remove('active');
+document.getElementById('videoPlayer').src = '';
+document.getElementById('playerSection').style.display = 'none';
+const idle = document.getElementById('theaterIdle');
+if (idle) idle.style.display = 'flex';
+}, 300);
+document.body.style.overflow = '';
+}
+function toggleTheaterFullscreen() {
+const stage = document.getElementById('theaterStage');
+if (!stage) return;
+if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
+if (req) req.call(stage); else toast('Fullscreen not supported here', 'warning');
 }
 // P1: next-ep fallback based on episode runtime (~90%), not a blind 20s timer.
 // Primary trigger remains the >=95% progress event from the player.
@@ -1212,20 +1834,23 @@ const runtime = state.episodeRuntimes?.[state.episode] || 0;
 if (runtime > 0) state.nextEpTimer = setTimeout(() => showNextEpOverlay(), runtime * 0.9 * 60 * 1000);
 }
 function showNextEpOverlay() {
-const details = state.currentDetails;
+const details = state.currentDetails; // mini-player-only playback has no modal to show the overlay in
 if (!details) return;
+const overlay = document.getElementById('nextEpOverlay');
+if (overlay.style.display === 'flex') return; // L-01: a countdown is already running
 const seasons = (details.seasons || []).filter(s => s.season_number > 0);
 const currentSeason = seasons.find(s => s.season_number === state.season);
 if (!currentSeason) return;
 const nextEp = state.episode + 1;
 const hasNext = nextEp <= currentSeason.episode_count;
 if (!hasNext) return;
-const overlay = document.getElementById('nextEpOverlay');
 document.getElementById('nextEpTitle').textContent = `S${state.season} E${nextEp}`;
 document.getElementById('nextEpCountdown').dataset.nextEp = nextEp;
 overlay.style.display = 'flex';
 let countdown = 10;
 document.getElementById('nextEpCountdown').textContent = countdown;
+clearInterval(state._nextEpInterval); // L-01: never stack countdown intervals
+clearTimeout(state.nextEpTimer);
 const timer = setInterval(() => {
 countdown--;
 document.getElementById('nextEpCountdown').textContent = countdown;
@@ -1235,23 +1860,62 @@ state._nextEpInterval = timer;
 }
 function clearNextEpTimer() { clearTimeout(state.nextEpTimer); clearInterval(state._nextEpInterval); }
 function closeModal() {
-const modal = document.getElementById('detailModal');
+const modalEl = document.getElementById('detailModal');
+if (modalEl._closing) return; // re-entrancy guard: routeFromHash + user close can race
+modalEl._closing = true;
+setTimeout(() => { modalEl._closing = false; }, 450);
+closeTheater();
+const modal = modalEl;
 releaseFocus(modal.querySelector('.modal-container'));
 modal.classList.remove('visible');
 clearNextEpTimer();
 state.currentDetails = null;
 state.currentTrailerKey = null;
+state.mediaId = null; state.mediaType = null; // V-04: stale media context used to let the 'm' hotkey restart playback after closing
+state.playbackSession = null; state._lastProgress = 0; // L-04: no live session outside the mini player
+clearRoute();
 setTimeout(() => {
 modal.classList.remove('active');
 document.getElementById('videoPlayer').src = '';
 document.getElementById('playerSection').style.display = 'none';
 document.title = 'VOID — Stream Anything. Fear Nothing.';
 updateMetaTag('description', 'Stream thousands of movies and TV shows — free, instant, no sign-up.');
+// F-03: canonical resets to the real deployment origin, not a hardcoded domain
 let canonical = document.querySelector('link[rel="canonical"]');
-if (canonical) canonical.setAttribute('href', 'https://void-streaming.netlify.app/');
+if (canonical) canonical.setAttribute('href', location.origin + location.pathname + location.search);
 }, 400);
 document.body.style.overflow = '';
 }
+
+// ============ HASH ROUTER (P5-6) ============
+// Deep links like #/movie/123 or #/tv/123 open the detail modal. Plain
+// section anchors (#movies, #genres…) are ignored.
+// U-05: opening a title now PUSHES a history entry, so the browser Back
+// button closes the modal instead of leaving the site. Back across several
+// titles walks the viewing history; a deep-linked entry is replaced in place.
+function setRoute(id, type) {
+try {
+const target = `#/${type}/${id}`;
+if (window.location.hash === target) { state._routePushed = false; return; } // deep link / back-navigation
+history.pushState(null, '', target);
+state._routePushed = true;
+} catch (e) {}
+}
+function clearRoute() {
+try {
+if (!window.location.hash.startsWith('#/')) return;
+if (state._routePushed) { state._routePushed = false; history.back(); } // Back closes the modal
+else history.replaceState(null, '', window.location.pathname + window.location.search);
+} catch (e) {}
+}
+function routeFromHash() {
+const m = (window.location.hash || '').match(/^#\/(movie|tv)\/(\d+)/);
+if (m) { openMedia(m[2], m[1]); return; }
+// U-05: Back/Forward moved off a modal route — close the modal if it's still up.
+const modal = document.getElementById('detailModal');
+if (modal && modal.classList.contains('active') && !modal._closing) closeModal();
+}
+window.addEventListener('hashchange', routeFromHash);
 
 // ============ TRAILER MODAL ============
 function openTrailer() {
@@ -1272,14 +1936,28 @@ document.getElementById('trailerPlayer').src = '';
 
 // ============ MINI PLAYER ============
 function initMiniPlayer() {
-document.getElementById('miniClose').addEventListener('click', closeMiniPlayer);
-document.getElementById('miniExpand').addEventListener('click', () => { closeMiniPlayer(); if (state.mediaId) openMedia(state.mediaId, state.mediaType); });
 const mp = document.getElementById('miniPlayer');
+document.getElementById('miniClose').addEventListener('click', closeMiniPlayer);
+document.getElementById('miniExpand').addEventListener('click', () => {
+closeMiniPlayer();
+// V-04: closeModal() now clears state.mediaId, so the mini player carries its
+// own copy of the media context for re-expanding.
+const id = mp.dataset.mediaId || state.mediaId;
+if (id) openMedia(id, mp.dataset.mediaType || state.mediaType);
+});
 const header = mp.querySelector('.mini-player-header');
 let isDrag = false, offsetX, offsetY;
-header.addEventListener('mousedown', e => { isDrag = true; offsetX = e.clientX - mp.getBoundingClientRect().left; offsetY = e.clientY - mp.getBoundingClientRect().top; mp.style.transition = 'none'; });
-document.addEventListener('mousemove', e => { if (!isDrag) return; mp.style.left = (e.clientX - offsetX) + 'px'; mp.style.top = (e.clientY - offsetY) + 'px'; mp.style.right = 'auto'; mp.style.bottom = 'auto'; });
-document.addEventListener('mouseup', () => { isDrag = false; mp.style.transition = ''; });
+// U-06: pointer events replace mouse-only drag (touch devices can now move the
+// panel) and the position is clamped to the viewport so it can't be thrown
+// half off-screen.
+const clampPos = (x, y) => ({
+left: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - mp.offsetWidth)),
+top: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - mp.offsetHeight))
+});
+header.addEventListener('pointerdown', e => { isDrag = true; offsetX = e.clientX - mp.getBoundingClientRect().left; offsetY = e.clientY - mp.getBoundingClientRect().top; mp.style.transition = 'none'; });
+document.addEventListener('pointermove', e => { if (!isDrag) return; const p = clampPos(e.clientX - offsetX, e.clientY - offsetY); mp.style.left = p.left + 'px'; mp.style.top = p.top + 'px'; mp.style.right = 'auto'; mp.style.bottom = 'auto'; });
+document.addEventListener('pointerup', () => { isDrag = false; mp.style.transition = ''; });
+document.addEventListener('pointercancel', () => { isDrag = false; mp.style.transition = ''; });
 }
 function toggleMiniPlayer() {
 const mp = document.getElementById('miniPlayer');
@@ -1289,30 +1967,66 @@ document.getElementById('miniPlayerTitle').textContent = title;
 document.getElementById('miniPlayerFrame').src = url;
 mp.classList.add('active');
 mp.style.right = '1.5rem'; mp.style.bottom = '1.5rem'; mp.style.left = 'auto'; mp.style.top = 'auto';
+// V-04: snapshot media context before closeModal clears it
+mp.dataset.mediaId = String(state.mediaId || '');
+mp.dataset.mediaType = state.mediaType || 'movie';
+mp.dataset.season = String(state.season || 1);
+mp.dataset.episode = String(state.episode || 1);
+// L-04: closeModal() nulls the playback session — rebuild it from the
+// snapshot so the mini player keeps saving progress afterwards.
+const keep = { id: String(state.mediaId || ''), type: state.mediaType || 'movie', title, poster: state.currentDetails?.poster_path || '', season: state.season || 1, episode: state.episode || 1 };
 closeModal();
+if (keep.id && keep.id !== 'null') state.playbackSession = keep;
 toast('Mini player active', 'info');
 }
-function closeMiniPlayer() { const mp = document.getElementById('miniPlayer'); mp.classList.remove('active'); document.getElementById('miniPlayerFrame').src = ''; }
+function closeMiniPlayer() {
+const mp = document.getElementById('miniPlayer');
+mp.classList.remove('active');
+document.getElementById('miniPlayerFrame').src = '';
+// L-03/L-04: flush the last known progress before the session goes away.
+if (state.playbackSession && state._lastProgress > 0) {
+const s = state.playbackSession;
+updateContinueWatching(s.id, s.type, s.title, s.poster, state._lastProgress, s.season, s.episode);
+}
+state.playbackSession = null; state._lastProgress = 0;
+}
 
 // ============ KEYBOARD SHORTCUTS ============
 function initKeyboardShortcuts() {
 document.getElementById('shortcutsBtn').addEventListener('click', () => toggleShortcutsModal());
 document.addEventListener('keydown', e => {
-if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); document.getElementById('searchInput').focus(); document.getElementById('searchInput').scrollIntoView({ behavior: 'smooth' }); }
+// U-04: the guard also skips contenteditable targets (rich inputs report as
+// plain DIVs), and hotkeys match e.code so non-QWERTY layouts don't misfire.
+const tgt = e.target;
+if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT' || tgt.isContentEditable)) return;
+// V-06: Ctrl+K is owned by the command palette (command-palette.js, capture
+// phase). The search field is focused with '/', which we advertise in the
+// placeholder and shortcuts modal. (Shift+/ is '?' — handled below.)
+if (e.code === 'Slash' && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+const overlayOpen = document.querySelector('.shortcuts-overlay.active, .ai-chat-overlay.active, .pin-overlay.active, .import-overlay.active, .trailer-overlay.active, #detailModal.active');
+if (!overlayOpen) { e.preventDefault(); const si = document.getElementById('searchInput'); si.scrollIntoView({ behavior: 'smooth' }); si.focus(); }
+return;
+}
 if (e.key === 'Escape') {
+if (document.getElementById('theaterOverlay')?.classList.contains('active')) { closeTheater(); return; }
 if (document.getElementById('aiChatOverlay').classList.contains('active')) { toggleAIChat(false); return; }
 closeTrailer();
-if (document.getElementById('shortcutsModal').classList.contains('active')) { toggleShortcutsModal(); return; }
 if (document.getElementById('detailModal').classList.contains('active')) { closeModal(); return; }
 }
-if (e.key === '?' || (e.shiftKey && e.key === '/')) toggleShortcutsModal();
-if (e.key === 'm' || e.key === 'M') { if (state.mediaId) toggleMiniPlayer(); }
-if (e.key === 'w' || e.key === 'W') { if (state.currentDetails) { const d = state.currentDetails; toggleWatchlist(d.id, state.mediaType, d.title || d.name, d.poster_path || ''); } }
-if (e.key === 't' || e.key === 'T') { if (state.currentTrailerKey) openTrailer(); }
-if (e.key === 'd' || e.key === 'D') toggleTheme();
-if (e.key === 'a' || e.key === 'A') toggleAIChat();
-if (e.key === 's' || e.key === 'S') { const items = state.bannerItems; if (items.length) { const r = items[Math.floor(Math.random() * items.length)]; openMedia(r.id, r.media_type); } }
+if (e.ctrlKey || e.metaKey || e.altKey) return; // never fight browser/OS shortcuts
+if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) toggleShortcutsModal();
+// V-04: the media hotkeys below only respond while a title is open. They
+// used to fire globally, so a stray 'm' on the home screen started streaming
+// the last-viewed title via the mini player (autoPlay=true).
+const mediaOpen = document.getElementById('detailModal').classList.contains('active');
+if (e.code === 'KeyM') { if (mediaOpen && state.mediaId) toggleMiniPlayer(); }
+if (e.code === 'KeyW') { if (mediaOpen && state.currentDetails) { const d = state.currentDetails; toggleWatchlist(d.id, state.mediaType, d.title || d.name, d.poster_path || ''); } }
+if (e.code === 'KeyT') { if (mediaOpen && state.currentTrailerKey) openTrailer(); }
+if (e.code === 'KeyD') toggleTheme();
+if (e.code === 'KeyA') toggleAIChat();
+// V-04: 'Surprise me' now needs Shift+S — a bare 's' opened a random title's
+// modal out of nowhere while typing elsewhere on the page.
+if (e.shiftKey && e.code === 'KeyS') { const items = state.bannerItems; if (items.length) { const r = items[Math.floor(Math.random() * items.length)]; openMedia(r.id, r.media_type); } }
 });
 document.getElementById('surpriseMeBtn').addEventListener('click', () => {
 const items = state.bannerItems;
@@ -1321,9 +2035,8 @@ if (items.length) { const r = items[Math.floor(Math.random() * items.length)]; o
 }
 function toggleShortcutsModal() {
 const m = document.getElementById('shortcutsModal');
-m.classList.toggle('active');
-if (m.classList.contains('active')) trapFocus(m.querySelector('.shortcuts-modal'));
-else releaseFocus(m.querySelector('.shortcuts-modal'));
+if (m.classList.contains('active')) closeOverlay(m);
+else openOverlay(m, '.shortcuts-modal button, .shortcuts-modal a');
 }
 
 // ============ REVIEWS ============
@@ -1331,10 +2044,13 @@ function initReviews() {
 const starContainer = document.getElementById('starRating');
 starContainer.innerHTML = [1, 2, 3, 4, 5].map(n => `<button class="star-btn" data-action="select-star" data-star="${n}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('');
 const id = state.mediaId;
+// L-07: the hidden star selection leaked between titles — reset it to match
+// what the form actually shows for THIS title.
+state._selectedStars = 0;
 if (!id) return;
 const ratings = Store.get('user_ratings', {});
 const existing = ratings[id];
-if (existing) { document.querySelectorAll('.star-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.star) <= existing.stars)); document.getElementById('reviewTextarea').value = existing.review || ''; }
+if (existing) { state._selectedStars = existing.stars; document.querySelectorAll('.star-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.star) <= existing.stars)); document.getElementById('reviewTextarea').value = existing.review || ''; }
 else { document.querySelectorAll('.star-btn').forEach(b => b.classList.remove('active')); document.getElementById('reviewTextarea').value = ''; }
 renderReviews();
 document.getElementById('submitReviewBtn').onclick = submitReview;
@@ -1384,14 +2100,14 @@ function initCollections() {
 const grid = document.getElementById('collectionsGrid');
 grid.innerHTML = DEFAULT_COLLECTIONS.map(col => {
 const count = Store.get(col.storeKey, []).length;
-return `<div class="collection-card" data-action="scroll-to-section" data-keyboard="true" data-target="${col.id}" role="button" tabindex="0" aria-label="${col.title}, ${count} items">
+return `<button type="button" class="collection-card" data-action="scroll-to-section" data-target="${col.id}" aria-label="${col.title}, ${count} items">
   <div class="collection-card-gradient"></div>
   <div class="collection-card-content">
     <div class="collection-card-emoji">${col.emoji}</div>
     <div class="collection-card-title">${col.title}</div>
     <div class="collection-card-count">${count} items</div>
   </div>
-</div>`;
+</button>`;
 }).join('');
 }
 function scrollToSection(id) {
@@ -1399,16 +2115,18 @@ const m = { watchlist: 'myWatchlistSection', continue: 'continueWatchingSection'
 document.getElementById(m[id] || id)?.scrollIntoView({ behavior: 'smooth' });
 }
 function initCustomLists() {
-document.getElementById('createListBtn').addEventListener('click', () => { document.getElementById('createListModal').classList.add('active'); document.getElementById('listNameInput').focus(); });
+document.getElementById('createListBtn').addEventListener('click', () => openOverlay(document.getElementById('createListModal'), '#listNameInput'));
 document.getElementById('saveListBtn').addEventListener('click', saveCustomList);
-document.getElementById('cancelListBtn').addEventListener('click', () => document.getElementById('createListModal').classList.remove('active'));
+document.getElementById('cancelListBtn').addEventListener('click', () => closeOverlay(document.getElementById('createListModal')));
 document.getElementById('shareWatchlistBtn').addEventListener('click', () => {
-const link = `${window.location.origin}${window.location.pathname}?list=watchlist`;
+// S-05: absolute URL so the link survives being pasted anywhere
+const link = `${location.origin}${location.pathname}?list=watchlist`;
 document.getElementById('shareWatchlistLink').value = link;
-document.getElementById('shareWatchlistModal').classList.add('active');
+openOverlay(document.getElementById('shareWatchlistModal'), '#copyShareLinkBtn');
+document.getElementById('shareWatchlistLink').select();
 });
 document.getElementById('copyShareLinkBtn').addEventListener('click', () => { navigator.clipboard.writeText(document.getElementById('shareWatchlistLink').value).then(() => toast('Link copied!', 'success')); });
-document.getElementById('closeShareWatchlistBtn').addEventListener('click', () => document.getElementById('shareWatchlistModal').classList.remove('active'));
+document.getElementById('closeShareWatchlistBtn').addEventListener('click', () => closeOverlay(document.getElementById('shareWatchlistModal')));
 renderCustomLists();
 }
 function saveCustomList() {
@@ -1418,7 +2136,7 @@ if (!name) { toast('Please enter a list name', 'warning'); return; }
 let lists = Store.get('custom_lists', []);
 lists.push({ id: Date.now(), name, desc, items: [], createdAt: Date.now() });
 Store.set('custom_lists', lists);
-document.getElementById('createListModal').classList.remove('active');
+closeOverlay(document.getElementById('createListModal'));
 document.getElementById('listNameInput').value = '';
 document.getElementById('listDescInput').value = '';
 renderCustomLists();
@@ -1465,7 +2183,7 @@ const dropdown = document.getElementById('addToListDropdown');
 const d = state.currentDetails;
 if (!d) { dropdown.innerHTML = '<div style="padding:0.5rem;color:var(--text-muted);font-size:0.8rem">No lists yet</div>'; return; }
 dropdown.innerHTML = lists.map(list => {
-const inList = list.items.some(i => i.id === d.id);
+const inList = list.items.some(i => String(i.id) === String(d.id) && i.media_type === state.mediaType); // V-02
 return `<button class="add-to-list-option ${inList ? 'in-list' : ''}" data-action="toggle-item-in-list" data-id="${list.id}" role="menuitem">${inList ? '✓' : '+'} ${esc(list.name)}</button>`;
 }).join('') + `<button class="add-to-list-option" data-action="new-list-from-dropdown" role="menuitem">+ New List</button>`;
 }
@@ -1474,9 +2192,9 @@ let lists = Store.get('custom_lists', []);
 const list = lists.find(l => l.id === listId);
 if (!list) return;
 const d = state.currentDetails;
-const idx = list.items.findIndex(i => i.id === d.id);
+const idx = list.items.findIndex(i => String(i.id) === String(d.id) && i.media_type === state.mediaType); // V-02: type-aware
 if (idx > -1) { list.items.splice(idx, 1); toast('Removed from list', 'info'); }
-else { list.items.push({ id: d.id, media_type: state.mediaType, title: d.title || d.name, poster_path: d.poster_path, vote_average: d.vote_average, genre_ids: [] }); toast('Added to list', 'success'); }
+else { list.items.push({ id: String(d.id), media_type: state.mediaType, title: d.title || d.name, poster_path: d.poster_path, vote_average: d.vote_average, genre_ids: [] }); toast('Added to list', 'success'); } // V-02: string id
 Store.set('custom_lists', lists);
 renderAddToListDropdown();
 renderCustomLists();
@@ -1494,7 +2212,7 @@ const overlay = document.getElementById('profileOverlay');
 const profiles = Store.get('profiles', []);
 if (!profiles.length) { addDefaultProfile(); showProfileOverlay(); }
 else { const activeId = sessionStorage.getItem('void_active_profile_session'); if (!activeId) showProfileOverlay(); else applyProfile(profiles.find(p => p.id == activeId) || profiles[0]); }
-document.getElementById('manageProfilesBtn').addEventListener('click', () => { overlay.classList.remove('active'); document.getElementById('profileManagerModal').classList.add('active'); renderProfileManager(); });
+document.getElementById('manageProfilesBtn').addEventListener('click', () => { closeOverlay(overlay); openOverlay(document.getElementById('profileManagerModal'), 'button'); renderProfileManager(); });
 document.getElementById('saveProfileBtn').addEventListener('click', saveProfile);
 document.getElementById('cancelProfileBtn').addEventListener('click', () => { document.getElementById('profileForm').style.display = 'none'; });
 renderAvatarPicker();
@@ -1507,14 +2225,13 @@ Store.set('profiles', profiles);
 }
 function showProfileOverlay() {
 const overlay = document.getElementById('profileOverlay');
-overlay.classList.add('active');
 renderProfileGrid();
-trapFocus(overlay.querySelector('.profile-selector'));
+openOverlay(overlay, '.profile-card');
 }
 function renderProfileGrid() {
 const profiles = Store.get('profiles', []);
 const grid = document.getElementById('profileGrid');
-grid.innerHTML = profiles.map(p => `<div class="profile-card" data-action="select-profile" data-keyboard="true" data-id="${p.id}" tabindex="0" role="button" aria-label="Select profile ${esc(p.name)}"><div class="profile-card-avatar">${p.avatar}</div><div class="profile-card-name">${esc(p.name)}</div></div>`).join('') + `<div class="profile-card add-new" data-action="add-profile-overlay" data-keyboard="true" tabindex="0" role="button" aria-label="Add new profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></div>`;
+grid.innerHTML = profiles.map(p => `<button type="button" class="profile-card" data-action="select-profile" data-id="${p.id}" aria-label="Select profile ${esc(p.name)}"><div class="profile-card-avatar">${p.avatar}</div><div class="profile-card-name">${esc(p.name)}</div></button>`).join('') + `<button type="button" class="profile-card add-new" data-action="add-profile-overlay" aria-label="Add new profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></button>`;
 }
 function selectProfile(id) {
 const profiles = Store.get('profiles', []);
@@ -1523,19 +2240,18 @@ if (!p) return;
 Store.set('active_profile', id);
 sessionStorage.setItem('void_active_profile_session', id);
 applyProfile(p);
-document.getElementById('profileOverlay').classList.remove('active');
-releaseFocus(document.getElementById('profileOverlay').querySelector('.profile-selector'));
+closeOverlay(document.getElementById('profileOverlay'));
 }
 function applyProfile(p) {
 document.getElementById('navProfileAvatar').textContent = p.avatar;
 document.getElementById('navProfileName').textContent = p.name;
 }
 function renderAvatarPicker() {
-document.getElementById('avatarPicker').innerHTML = DEFAULT_AVATARS.map(a => `<div class="avatar-option" data-action="select-avatar" data-keyboard="true" data-avatar="${esc(a)}" tabindex="0" role="button" aria-label="Avatar ${a}">${a}</div>`).join('');
+document.getElementById('avatarPicker').innerHTML = DEFAULT_AVATARS.map(a => `<button type="button" class="avatar-option" data-action="select-avatar" data-avatar="${esc(a)}" aria-label="Avatar ${a}" aria-pressed="false">${a}</button>`).join('');
 }
-function selectAvatar(a) { document.querySelectorAll('.avatar-option').forEach(el => el.classList.toggle('selected', el.textContent === a)); state._selectedAvatar = a; }
+function selectAvatar(a) { document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.textContent === a; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); }); state._selectedAvatar = a; }
 function renderProfileGenreChips() {
-document.getElementById('profileGenreChips').innerHTML = ALL_GENRES.slice(0, 8).map(g => `<div class="profile-genre-chip" data-id="${g.id}" data-action="toggle-selected" data-keyboard="true" tabindex="0" role="checkbox" aria-checked="false">${g.name}</div>`).join('');
+document.getElementById('profileGenreChips').innerHTML = ALL_GENRES.slice(0, 8).map(g => `<button type="button" class="profile-genre-chip" data-id="${g.id}" data-action="toggle-selected" role="checkbox" aria-checked="false">${g.name}</button>`).join('');
 }
 function saveProfile() {
 const name = document.getElementById('profileNameInput').value.trim();
@@ -1573,7 +2289,7 @@ closeBtn.className = 'btn btn-outline btn-sm pm-close';
 closeBtn.textContent = 'DONE';
 closeBtn.style.display = 'block';
 closeBtn.style.marginTop = '1rem';
-closeBtn.onclick = () => { document.getElementById('profileManagerModal').classList.remove('active'); showProfileOverlay(); };
+closeBtn.onclick = () => { closeOverlay(document.getElementById('profileManagerModal')); showProfileOverlay(); };
 mgr.appendChild(closeBtn);
 }
 }
@@ -1584,13 +2300,24 @@ if (!p) return;
 state._editProfileId = id;
 document.getElementById('profileNameInput').value = p.name;
 state._selectedAvatar = p.avatar;
-document.querySelectorAll('.avatar-option').forEach(el => el.classList.toggle('selected', el.textContent === p.avatar));
+document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.textContent === p.avatar; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); });
 }
 function deleteProfile(id) {
 let profiles = Store.get('profiles', []);
 if (profiles.length <= 1) { toast("Can't delete last profile", 'warning'); return; }
+const wasActive = String(Store.get('active_profile', '')) === String(id) || String(sessionStorage.getItem('void_active_profile_session') || '') === String(id);
 profiles = profiles.filter(p => p.id !== id);
 Store.set('profiles', profiles);
+if (wasActive) {
+// L-08: deleting the ACTIVE profile used to leave a dangling pointer —
+// getCurrentProfile() returned null (AI personalization silently off) and
+// the next boot quietly fell back to profiles[0]. Reassign explicitly.
+const fallback = profiles[0];
+Store.set('active_profile', fallback.id);
+sessionStorage.setItem('void_active_profile_session', fallback.id);
+applyProfile(fallback);
+toast(`Switched to profile "${fallback.name}"`, 'info');
+}
 renderProfileManager();
 renderProfileGrid();
 }
@@ -1604,20 +2331,22 @@ document.querySelectorAll('.content-section').forEach(section => observer.observ
 }
 
 // ============ PARALLAX ============
+// P-01: the document-wide mousemove handler that polled '.content-card:hover'
+// and forced style/layout work on every mouse move is GONE — card tilt is now
+// a pure CSS :hover transform (see styles.css), and cards can no longer get
+// stuck tilted after the pointer leaves. The banner scroll parallax stays,
+// rAF-throttled with a passive listener.
 function initParallax() {
+let ticking = false;
 window.addEventListener('scroll', () => {
+if (ticking) return;
+ticking = true;
+requestAnimationFrame(() => {
 const scrolled = window.scrollY;
 document.querySelectorAll('.banner-backdrop').forEach(el => { el.style.transform = `scale(1.05) translateY(${scrolled * 0.15}px)`; });
+ticking = false;
 });
-document.addEventListener('mousemove', e => {
-document.querySelectorAll('.content-card:hover').forEach(card => {
-const rect = card.getBoundingClientRect();
-const x = (e.clientX - rect.left) / rect.width - 0.5;
-const y = (e.clientY - rect.top) / rect.height - 0.5;
-card.style.transform = `scale(1.05) perspective(500px) rotateY(${x * 5}deg) rotateX(${-y * 5}deg)`;
-});
-});
-document.addEventListener('mouseleave', () => { document.querySelectorAll('.content-card').forEach(card => card.style.transform = ''); }, true);
+}, { passive: true });
 }
 
 // ============ RIPPLE EFFECT ============
@@ -1667,31 +2396,38 @@ function dismissPWA(el) { Store.set('pwa_dismissed', true); el?.remove(); }
 window.addEventListener('message', event => {
 if (event.origin !== 'https://www.vidking.net') return;
 const data = event.data;
-if (data && data.type === 'timeupdate' && state.currentDetails) {
+if (!data || data.type !== 'timeupdate') return;
+// L-04: prefer the live modal context, fall back to the playback session so
+// progress keeps saving while the mini player runs after the modal closed.
+const s = state.currentDetails
+? { id: String(state.mediaId), type: state.mediaType, title: state.currentDetails.title || state.currentDetails.name || '', poster: state.currentDetails.poster_path || '', season: state.season || 1, episode: state.episode || 1 }
+: state.playbackSession;
+if (!s || !s.id || s.id === 'null') return;
 const progress = data.currentTime && data.duration ? Math.round((data.currentTime / data.duration) * 100) : 0;
-if (progress > 0) {
-const d = state.currentDetails;
-updateContinueWatching(state.mediaId, state.mediaType, d.title || d.name, d.poster_path, progress, state.season, state.episode);
+state._lastProgress = progress;
+// L-03: the handler used to write storage AND rebuild the continue-watching
+// row ~4x/second during playback. Writes are throttled to one per 15s, with a
+// final flush when the theater or mini player closes.
+const due = Date.now() - state._lastProgressWrite >= 15000;
+const finished = progress >= 95;
+if (progress > 0 && (due || finished)) {
+state._lastProgressWrite = Date.now();
+updateContinueWatching(s.id, s.type, s.title, s.poster, progress, s.season, s.episode);
 }
-if (state.mediaType === 'tv' && data.duration && data.currentTime) {
-const pct = Math.round((data.currentTime / data.duration) * 100);
-const epProgress = Store.get(`ep_progress_${state.mediaId}`, {});
-epProgress[`s${state.season}e${state.episode}`] = pct;
-Store.set(`ep_progress_${state.mediaId}`, epProgress);
-if (pct >= 95 && state.mediaType === 'tv') showNextEpOverlay();
-}
+if (s.type === 'tv' && data.duration && data.currentTime && (due || finished)) {
+const epProgress = Store.get(`ep_progress_${s.id}`, {});
+epProgress[`s${s.season}e${s.episode}`] = progress;
+Store.set(`ep_progress_${s.id}`, epProgress);
+if (progress >= 95) showNextEpOverlay();
 }
 });
 
 // ============ PERFORMANCE OPTIMIZATIONS ============
 function initLazyLoading() { observeImages(document); }
-function initVirtualScroll() {
-const scrollRows = document.querySelectorAll('.scroll-row');
-scrollRows.forEach(row => {
-const cards = row.querySelectorAll('.content-card');
-if (cards.length > 50) { row.setAttribute('data-virtual', 'true'); row.setAttribute('data-total-items', cards.length); }
-});
-}
+// P-04/Q-04: initVirtualScroll (set attributes nothing consumed),
+// preloadCriticalResources (brittle slice(5,-2) URL parse that no-oped) and
+// the empty cleanupObservers() stub are removed — dead code that implied
+// behavior which did not exist.
 function debounce(func, wait) {
 let timeout;
 return function executedFunction(...args) { const later = () => { clearTimeout(timeout); func(...args); }; clearTimeout(timeout); timeout = setTimeout(later, wait); };
@@ -1701,36 +2437,19 @@ let inThrottle;
 return function (...args) { if (!inThrottle) { func.apply(this, args); inThrottle = true; setTimeout(() => inThrottle = false, limit); } };
 }
 function scheduleIdleTask(callback) { if ('requestIdleCallback' in window) { requestIdleCallback(callback); } else { setTimeout(callback, 1); } }
-function preloadCriticalResources() {
-const featuredImages = document.querySelectorAll('.featured-banner .banner-backdrop');
-featuredImages.forEach((img, index) => {
-if (index < 3) {
-const imgUrl = img.style.backgroundImage.slice(5, -2);
-const link = document.createElement('link');
-link.rel = 'preload'; link.as = 'image'; link.href = imgUrl;
-document.head.appendChild(link);
-}
-});
-}
-function cleanupObservers() { /* timers cleaned on unload */ }
 
 // ============ ANALYTICS & ERROR MONITORING ============
+// P-06: the old Analytics collected UA/screen/viewport data, persisted it to
+// localStorage, and never sent it anywhere — dead telemetry with a privacy
+// surface and no opt-out. VOID ships no analytics pipeline, so track() and
+// friends are documented no-ops; ErrorMonitor below stays console-only.
 const Analytics = {
-events: [],
-track(eventType, data = {}) {
-const event = { type: eventType, timestamp: Date.now(), url: window.location.href, referrer: document.referrer, userAgent: navigator.userAgent, screen: { width: window.screen.width, height: window.screen.height }, viewport: { width: window.innerWidth, height: window.innerHeight }, ...data };
-this.events.push(event);
-console.log('[Analytics]', eventType, data);
-this.saveEvents();
-this.sendEvent(event);
-},
-saveEvents() { try { localStorage.setItem('void_analytics', JSON.stringify(this.events.slice(-100))); } catch (e) { console.warn('Failed to save analytics:', e); } },
-sendEvent(event) { if (navigator.sendBeacon) { /* navigator.sendBeacon('/analytics', JSON.stringify(event)); */ } },
-pageView(pageName) { this.track('page_view', { page: pageName || window.location.pathname }); },
-mediaPlay(mediaId, mediaType, title) { this.track('media_play', { mediaId, mediaType, title }); },
-search(query, resultsCount) { this.track('search', { query, resultsCount }); },
-addToWatchlist(mediaId, mediaType) { this.track('add_to_watchlist', { mediaId, mediaType }); },
-removeFromWatchlist(mediaId) { this.track('remove_from_watchlist', { mediaId }); }
+track() {},
+pageView() {},
+mediaPlay() {},
+search() {},
+addToWatchlist() {},
+removeFromWatchlist() {}
 };
 const ErrorMonitor = {
 errors: [],
@@ -1766,24 +2485,18 @@ clearErrors() { this.errors = []; }
 };
 function initPerformanceOptimizations() {
 initLazyLoading();
-initVirtualScroll();
-scheduleIdleTask(preloadCriticalResources);
-cleanupObservers();
 ErrorMonitor.init();
-Analytics.pageView('home');
-console.log('[Performance] Optimizations initialized');
 }
 // Wrap renderContentRow with performance telemetry using a sealed decorator
 // so it can't be accidentally overwritten by other scripts.
 (function decorateRenderContentRow() {
   const original = renderContentRow;
-  const wrapper = function (containerId, items) {
+  const wrapper = function (containerId, items, append) {
     const t0 = performance.now();
-    original(containerId, items);
+    original(containerId, items, append);
     const dt = performance.now() - t0;
     if (dt > 100) {
       console.warn(`[Performance] Slow render for ${containerId}: ${dt.toFixed(2)}ms`);
-      Analytics.track('slow_render', { containerId, duration: dt, itemCount: items.length });
     }
   };
   Object.defineProperty(window, 'renderContentRow', { value: wrapper, writable: false, configurable: false });

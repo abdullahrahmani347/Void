@@ -1,5 +1,16 @@
---- .gitignore (原始)
+# dependencies / tooling
+node_modules/
+eslint-cache/
 
+# secrets — never commit keys
+.env
+.env.*
+!.env.example
 
-+++ .gitignore (修改后)
-Nothing needs to be added to .gitignore since the changes only include source files (.js, .html, .json) without any build artifacts, dependencies, or temporary files.
+# logs / OS junk
+*.log
+.DS_Store
+Thumbs.db
+
+# local dev artifacts
+void-server.log

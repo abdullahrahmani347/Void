@@ -1,13 +1,52 @@
 {
   "name": "VOID Streaming",
   "short_name": "VOID",
-  "description": "Stream anything. Fear nothing.",
-  "start_url": "/",
+  "description": "Stream thousands of movies and TV shows — free, instant, no sign-up.",
+  "id": "/",
+  "start_url": "/?section=movies",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#030303",
   "theme_color": "#E3001B",
+  "categories": ["entertainment", "movies", "tv"],
   "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
-  ]
+    { "src": "icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Browse Movies",
+      "short_name": "Movies",
+      "description": "Browse our movie collection",
+      "url": "/?section=movies",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Browse TV Shows",
+      "short_name": "TV Shows",
+      "description": "Browse our TV show collection",
+      "url": "/?section=tv",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "My Watchlist",
+      "short_name": "Watchlist",
+      "description": "View your watchlist",
+      "url": "/?section=watchlist",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
 }

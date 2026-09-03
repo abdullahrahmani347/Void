@@ -102,7 +102,7 @@
     lines.slice(0, 2).forEach(l => { ctx.fillText(l, W / 2, y); y += 80; });
 
     // Meta
-    ctx.font = '400 32px "JetBrains Mono", monospace';
+    ctx.font = '400 32px "DM Sans", sans-serif'; // U-08: JetBrains Mono was never loaded — silent fallback
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.fillText(`${year} · ${state.mediaType === 'movie' ? 'MOVIE' : 'TV SERIES'}`, W / 2, y + 8);
     y += 70;
@@ -126,8 +126,8 @@
     ctx.fillStyle = '#E3001B'; ctx.fillRect(64, H - 138, 8, 64);
     ctx.fillStyle = '#fff'; ctx.font = '700 58px "Bebas Neue", sans-serif';
     ctx.fillText('VOID', 92, H - 88);
-    ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '400 26px "JetBrains Mono", monospace';
-    ctx.fillText('void-streaming.netlify.app', 92, H - 52);
+    ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '400 26px "DM Sans", sans-serif';
+    ctx.fillText(location.host || 'void-streaming.netlify.app', 92, H - 52); // honest deploy origin
   }
 
   function buildModal() {
@@ -161,10 +161,12 @@
   const blob = () => new Promise(res => canvas.toBlob(res, 'image/png'));
   async function downloadCard() {
     const b = await blob();
+    const url = URL.createObjectURL(b); // L-16: object URLs were never revoked
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(b);
+    a.href = url;
     a.download = `void-${(state.currentDetails?.title || state.currentDetails?.name || 'card').toLowerCase().replace(/\s+/g, '-')}.png`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast('Card saved', 'success');
   }
   async function shareCard() {

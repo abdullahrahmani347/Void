@@ -1,7 +1,10 @@
 /* resume-dialog.js — P2
    Netflix-style "Resume / Start over" for movies with saved progress.
-   Patches playMedia. (Actual seeking depends on the embed; this at least
-   gives the user the choice and correctly maintains/clears stored progress.) */
+   Patches playMedia.
+   L-06: the embed cannot seek to a timestamp, so the old copy promised a
+   resume it could not perform — users who clicked "Resume" lost their place
+   anyway. The dialog now says honestly that playback starts from the
+   beginning and lets the user choose between keeping or clearing progress. */
 (function () {
   'use strict';
   let overlay, pctEl, titleEl, barEl;
@@ -13,12 +16,12 @@
     overlay.innerHTML = `
       <div class="resume-panel" role="dialog" aria-modal="true" aria-label="Resume playback">
         <div class="resume-icon" aria-hidden="true">▶</div>
-        <h3 class="resume-title">Continue watching?</h3>
-        <p class="resume-sub">You're <strong id="resumePct"></strong> through <strong id="resumeTitle"></strong></p>
+        <h3 class="resume-title">Watch this again?</h3>
+        <p class="resume-sub">You're <strong id="resumePct"></strong> through <strong id="resumeTitle"></strong>. Playback starts from the beginning — the player can't jump to your spot, but your progress keeps saving.</p>
         <div class="resume-progress" aria-hidden="true"><div id="resumeBar"></div></div>
         <div class="resume-actions">
           <button id="resumeStart" class="btn btn-outline btn-sm">Start over</button>
-          <button id="resumeContinue" class="btn btn-primary btn-sm">Resume</button>
+          <button id="resumeContinue" class="btn btn-primary btn-sm">Play from start</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -48,7 +51,7 @@
     const title = state.currentDetails?.title || state.currentDetails?.name || 'this';
     if (cw && cw.progress > 2 && cw.progress < 95) {
       show(cw.progress, title,
-        () => orig.call(this),   // Resume: keep stored progress, play
+        () => orig.call(this),   // Play: keep stored progress, start the embed
         () => { updateContinueWatching(state.mediaId, 'movie', title, state.currentDetails?.poster_path || '', 0); orig.call(this); } // Start over: clear, then play
       );
     } else {

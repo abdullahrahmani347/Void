@@ -59,16 +59,16 @@
     if (!rows.length) { toast('No rows found in that CSV', 'warning'); return; }
     toast(`Importing ${Math.min(rows.length, 60)} titles…`, 'info');
     let diary = Store.get('watch_diary', []);
-    const seen = new Set(diary.map(e => e.id));
+    const seen = new Set(diary.map(e => String(e.id))); // V-02: string ids
     let added = 0, missed = 0;
     for (const r of rows.slice(0, 60)) {
       try {
         const res = await tmdb(`/search/multi?query=${encodeURIComponent(r.title)}&include_adult=false`);
         const pool = (res.results || []).filter(x => x.media_type === 'movie' || x.media_type === 'tv');
         const hit = pool.find(x => r.year && (x.release_date || x.first_air_date || '').startsWith(String(r.year))) || pool[0];
-        if (hit && !seen.has(hit.id)) {
-          seen.add(hit.id);
-          diary.unshift({ id: hit.id, type: hit.media_type, title: hit.title || hit.name, poster: hit.poster_path, rating: r.rating, date: r.date || new Date().toISOString().split('T')[0], watchedAt: Date.now() });
+        if (hit && !seen.has(String(hit.id))) {
+          seen.add(String(hit.id));
+          diary.unshift({ id: String(hit.id), type: hit.media_type, title: hit.title || hit.name, poster: hit.poster_path, rating: r.rating, date: r.date || new Date().toISOString().split('T')[0], watchedAt: Date.now() }); // V-02: string id
           added++;
         } else missed++;
       } catch (e) { missed++; }

@@ -63,7 +63,7 @@
   function titleHTML(t, idx) {
     return `<div class="cmd-item" role="option" data-idx="${idx}">
       ${t.poster ? `<img class="cmd-item-poster" src="${IMG_SM}${t.poster}" alt="" loading="lazy">` : '<span class="cmd-item-icon" aria-hidden="true">🎬</span>'}
-      <span class="cmd-item-text"><span class="cmd-item-label">${t.label}</span><span class="cmd-item-sub">${t.year} · ${t.mtype === 'movie' ? 'Movie' : 'TV'}</span></span>
+      <span class="cmd-item-text"><span class="cmd-item-label">${esc(t.label)}</span><span class="cmd-item-sub">${esc(t.year)} · ${t.mtype === 'movie' ? 'Movie' : 'TV'}</span></span>
     </div>`;
   }
 
@@ -86,7 +86,7 @@
       let html = '';
       if (actions.length) html += '<div class="cmd-group">Commands</div>' + actions.map((a, i) => actionHTML(a, i)).join('');
       if (titles.length) html += '<div class="cmd-group">Titles</div>' + titles.map((t, i) => titleHTML(t, i + actions.length)).join('');
-      resultsEl.innerHTML = html || `<div class="cmd-empty">No results for "${q}"</div>`;
+      resultsEl.innerHTML = html || `<div class="cmd-empty">No results for "${esc(q)}"</div>`;
       bindItems(); setActive(0);
     } catch (e) { /* keep actions */ }
   }

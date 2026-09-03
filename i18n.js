@@ -10,6 +10,10 @@
   ];
   const getLang = () => localStorage.getItem('void_lang') || 'en-US';
 
+  // F-08: Arabic metadata needs RTL layout direction; the picker also states
+  // honestly that it translates TMDB metadata only (UI chrome stays English).
+  function applyDir() { document.documentElement.dir = getLang().startsWith('ar') ? 'rtl' : 'ltr'; }
+
   const origTmdb = window.tmdb;
   window.tmdb = function (endpoint) {
     const lang = getLang();
@@ -24,7 +28,7 @@
     const wrap = document.createElement('div');
     wrap.className = 'lang-wrap';
     wrap.innerHTML = `
-      <button id="langBtn" class="nav-icon-btn" title="Language" aria-label="Change language" aria-haspopup="true">
+      <button id="langBtn" class="nav-icon-btn" title="Content language — translates movie/TV metadata only; UI stays English" aria-label="Change content language" aria-haspopup="menu">
         <span class="lang-glyph" aria-hidden="true">🌐</span>
       </button>
       <div id="langMenu" class="lang-menu" role="menu" hidden>
@@ -47,5 +51,5 @@
     });
   }
 
-  document.addEventListener('DOMContentLoaded', build);
+  document.addEventListener('DOMContentLoaded', () => { applyDir(); build(); });
 })();

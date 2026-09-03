@@ -30,7 +30,7 @@
     btn.parentNode.replaceChild(fresh, btn);
     fresh.addEventListener('click', () => {
       document.getElementById('shareWatchlistLink').value = encodedLink();
-      document.getElementById('shareWatchlistModal').classList.add('active');
+      window.openOverlay(document.getElementById('shareWatchlistModal'), '#copyShareLinkBtn');
     });
   }
 
@@ -45,7 +45,7 @@
     for (const { i, t } of items.slice(0, 30)) {
       try {
         const d = await tmdb(`/${t === 'tv' ? 'tv' : 'movie'}/${i}`);
-        fetched.push({ id: i, type: t, title: d.title || d.name, poster: d.poster_path });
+        fetched.push({ id: String(i), type: t, title: d.title || d.name, poster: d.poster_path }); // V-02: string ids
       } catch (e) {}
       await delay(250); // rate-limit: stay under TMDB's request ceiling
     }
@@ -60,7 +60,7 @@
         <div class="import-emoji" aria-hidden="true">🎬</div>
         <h3 class="import-title">A friend shared ${items.length} title${items.length > 1 ? 's' : ''}</h3>
         <div class="import-posters">
-          ${items.slice(0, 6).map(i => `<img src="${IMG_SM}${i.poster || ''}" alt="${esc(i.title)}" loading="lazy" onerror="this.style.display='none'">`).join('')}
+          ${items.slice(0, 6).map(i => `<img src="${IMG_SM}${i.poster || ''}" alt="${esc(i.title)}" loading="lazy" data-img-fallback data-fallback-hide="true">`).join('')}
           ${items.length > 6 ? `<span class="import-more">+${items.length - 6}</span>` : ''}
         </div>
         <div class="import-actions">
@@ -69,11 +69,15 @@
         </div>
       </div>`;
     document.body.appendChild(el);
-    const done = () => { el.remove(); history.replaceState(null, '', location.pathname); };
+    const panel = el.querySelector('.import-panel');
+    window.trapFocus(panel);
+    panel.querySelector('#importDismiss').focus();
+    el.addEventListener('click', e => { if (e.target === el) done(); });
+    const done = () => { window.releaseFocus(panel); el.remove(); history.replaceState(null, '', location.pathname); };
     el.querySelector('#importDismiss').onclick = done;
     el.querySelector('#importAdd').onclick = () => {
       let list = Store.get('watchlist', []);
-      items.forEach(i => { if (!list.some(w => w.id === i.id)) list.unshift({ id: i.id, type: i.type, title: i.title, poster: i.poster, addedAt: Date.now() }); });
+      items.forEach(i => { if (!list.some(w => String(w.id) === String(i.id) && w.type === i.type)) list.unshift({ id: String(i.id), type: i.type, title: i.title, poster: i.poster, addedAt: Date.now() }); }); // V-02: string ids + type-aware dedupe
       Store.set('watchlist', list);
       renderWatchlist();
       done();

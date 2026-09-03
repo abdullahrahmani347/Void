@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; font-src https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://api.themoviedb.org;">
     <title>VOID — Stream Anything. Fear Nothing.</title>
     <meta name="description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
     <meta name="keywords" content="movies, streaming, TV shows, watch free, VOID streaming, online movies">
@@ -11,26 +12,26 @@
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://void-streaming.netlify.app/">
+    <meta property="og:url" content="/">
     <meta property="og:title" content="VOID — Stream Anything. Fear Nothing.">
     <meta property="og:description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
-    <meta property="og:image" content="https://void-streaming.netlify.app/og-image.jpg">
+    <meta property="og:image" content="/logo.svg">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" content="https://void-streaming.netlify.app/">
     <meta property="twitter:title" content="VOID — Stream Anything. Fear Nothing.">
     <meta property="twitter:description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
-    <meta property="twitter:image" content="https://void-streaming.netlify.app/og-image.jpg">
+    <meta property="twitter:image" content="/logo.svg">
 
-    <link rel="canonical" href="https://void-streaming.netlify.app/">
+    <link rel="canonical" href="/">
     <link rel="manifest" href="manifest.webmanifest">
     <meta name="theme-color" content="#E3001B">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -87,31 +88,39 @@
                     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                 </svg>
             </button>
-            <button class="nav-icon-btn" id="shortcutsBtn" title="Keyboard shortcuts (?)"
-                aria-label="Show keyboard shortcuts">
+            <button class="nav-icon-btn" id="shortcutsBtn" title="Keyboard shortcuts (?)" data-tooltip="Press ? for keyboard shortcuts"
+                aria-label="Show keyboard shortcuts" aria-haspopup="dialog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <rect x="2" y="6" width="20" height="12" rx="2" />
                     <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" />
                 </svg>
             </button>
-            <div class="live-badge" aria-label="Live content available"><span class="live-indicator"
-                    aria-hidden="true"></span>LIVE</div>
-            <div class="profile-avatar-btn" id="profileAvatarBtn" title="Switch Profile" role="button" tabindex="0"
-                aria-label="Switch profile">
+            <button type="button" class="profile-avatar-btn" id="profileAvatarBtn" title="Switch Profile"
+                aria-label="Switch profile" aria-haspopup="dialog">
                 <span class="profile-avatar-icon" id="navProfileAvatar" aria-hidden="true">👤</span>
                 <span class="profile-avatar-name" id="navProfileName">Guest</span>
-            </div>
+            </button>
             <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false"
                 aria-controls="mobileMenu"><span aria-hidden="true"></span><span aria-hidden="true"></span><span
                     aria-hidden="true"></span></button>
         </div>
     </nav>
 
-    <!-- Mobile Menu -->
+    <!-- Mobile Menu Backdrop -->
+    <div class="menu-backdrop" id="menuBackdrop" aria-hidden="true"></div>
+
+    <!-- Mobile Menu (bottom sheet) -->
     <div class="mobile-menu" id="mobileMenu" role="navigation" aria-label="Mobile navigation">
-        <a href="#movies">Movies</a><a href="#tv-shows">TV Shows</a><a href="#genres">Genres</a>
-        <a href="#myWatchlistSection">Watchlist</a><a href="#collectionsSection">Collections</a><a
-            href="#diarySection">Diary</a>
+        <div class="mobile-menu-handle" aria-hidden="true"></div>
+        <div class="mobile-menu-head">
+            <span class="mobile-menu-title">Menu</span>
+            <button class="mobile-menu-close" id="mobileMenuClose" aria-label="Close menu">✕</button>
+        </div>
+        <div class="mobile-menu-links">
+            <a href="#movies">Movies</a><a href="#tv-shows">TV Shows</a><a href="#genres">Genres</a>
+            <a href="#myWatchlistSection">Watchlist</a><a href="#collectionsSection">Collections</a><a
+                href="#diarySection">Diary</a>
+        </div>
     </div>
 
     <!-- Featured Banner -->
@@ -128,11 +137,13 @@
                     <path d="m21 21-4.35-4.35" />
                 </svg>
                 <input type="text" class="search-input" id="searchInput"
-                    placeholder="Search or describe what you want… (Ctrl+K)" autocomplete="off"
+                    placeholder="Search or describe what you want… (press /)" autocomplete="off"
                     aria-label="Search movies and shows" aria-expanded="false" aria-haspopup="listbox"
                     aria-controls="searchResults">
                 <button class="search-clear-btn" id="searchClearBtn" style="display:none"
                     aria-label="Clear search">✕</button>
+                <div class="search-spinner" id="searchSpinner" hidden aria-hidden="true"><span
+                        class="spinner-ring"></span></div>
                 <div class="search-results" id="searchResults" role="listbox" aria-label="Search results"></div>
             </div>
             <div class="search-filters" id="searchFilters" role="group" aria-label="Filter search results">
@@ -205,7 +216,8 @@
         <section class="genre-bar" id="genres" aria-label="Browse by genre"></section>
 
         <!-- Filter Bar -->
-        <div class="filter-bar" id="filterBar" role="group" aria-label="Content filters">
+        <div class="filter-bar" id="filterBar" role="group" aria-label="Movie filters">
+            <span class="filter-scope" aria-hidden="true">MOVIES</span>
             <select class="filter-select" id="sortSelect" aria-label="Sort by">
                 <option value="popularity.desc">Popular</option>
                 <option value="vote_average.desc">Top Rated</option>
@@ -232,9 +244,10 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="continueWatching"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="continueWatching" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="continueWatching"></div><button class="scroll-arrow right"
                     data-target="continueWatching" aria-label="Scroll right">›</button>
             </div>
+            <div class="empty-state" id="continueWatchingEmpty" hidden>No shows in progress. Play something and it will appear here.</div>
         </section>
 
         <!-- Recently Viewed -->
@@ -244,9 +257,10 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="recentlyViewed"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="recentlyViewed" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="recentlyViewed"></div><button class="scroll-arrow right"
                     data-target="recentlyViewed" aria-label="Scroll right">›</button>
             </div>
+            <div class="empty-state" id="recentlyViewedEmpty" hidden>Nothing viewed yet. Explore movies and TV shows to build your history.</div>
         </section>
 
         <!-- My Watchlist -->
@@ -258,9 +272,10 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="myWatchlist"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="myWatchlist" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="myWatchlist"></div><button class="scroll-arrow right"
                     data-target="myWatchlist" aria-label="Scroll right">›</button>
             </div>
+            <div class="empty-state" id="myWatchlistEmpty" hidden>Your watchlist is empty — browse genres to add movies and shows.</div>
         </section>
 
         <!-- AI Recommendations -->
@@ -274,7 +289,7 @@
             <div class="ai-rec-reason" id="aiRecReason"></div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="aiRecommendations"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="aiRecommendations" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="aiRecommendations"></div><button class="scroll-arrow right"
                     data-target="aiRecommendations" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -286,7 +301,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="top10Row"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row top10-row" id="top10Row" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row top10-row" id="top10Row"></div><button class="scroll-arrow right"
                     data-target="top10Row" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -298,7 +313,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="newThisWeek"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="newThisWeek" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="newThisWeek"></div><button class="scroll-arrow right"
                     data-target="newThisWeek" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -311,7 +326,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="trendingMovies"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="trendingMovies" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="trendingMovies"></div><button class="scroll-arrow right"
                     data-target="trendingMovies" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -324,7 +339,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="popularTV"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="popularTV" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="popularTV"></div><button class="scroll-arrow right"
                     data-target="popularTV" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -336,7 +351,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="topRated"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="topRated" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="topRated"></div><button class="scroll-arrow right"
                     data-target="topRated" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -348,7 +363,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="nowPlaying"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="nowPlaying" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="nowPlaying"></div><button class="scroll-arrow right"
                     data-target="nowPlaying" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -361,7 +376,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="recommendations"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="recommendations" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="recommendations"></div><button class="scroll-arrow right"
                     data-target="recommendations" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -373,7 +388,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="hiddenGems"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="hiddenGems" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="hiddenGems"></div><button class="scroll-arrow right"
                     data-target="hiddenGems" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -385,7 +400,7 @@
             </div>
             <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="genreResults"
                     aria-label="Scroll left">‹</button>
-                <div class="scroll-row" id="genreResults" role="list"></div><button class="scroll-arrow right"
+                <div class="scroll-row" id="genreResults"></div><button class="scroll-arrow right"
                     data-target="genreResults" aria-label="Scroll right">›</button>
             </div>
         </section>
@@ -423,9 +438,11 @@
             </div>
             <p class="footer-text">Stream anything. Fear nothing. Powered by TMDB.</p>
             <div class="footer-links">
-                <a href="#" aria-label="Privacy policy">Privacy</a>
-                <a href="#" aria-label="Terms of service">Terms</a>
-                <a href="mailto:contact@void-streaming.netlify.app" aria-label="Contact us">Contact</a>
+                <!-- F-07: real pages now; replace hello@yourdomain.example with your
+                     real contact address — a Netlify subdomain receives no email. -->
+                <a href="privacy.html" aria-label="Privacy policy">Privacy</a>
+                <a href="terms.html" aria-label="Terms of service">Terms</a>
+                <a href="mailto:hello@yourdomain.example" aria-label="Contact us">Contact</a>
                 <a href="#dmca" id="dmcaLink" aria-label="DMCA Policy">DMCA</a>
             </div>
         </div>
@@ -457,10 +474,10 @@
                     <li>A statement that the information in the notification is accurate, and under penalty of perjury,
                         that you are authorized to act on behalf of the owner.</li>
                 </ul>
-                <p>Please send DMCA notices to: <strong>dmca@void-streaming.netlify.app</strong></p>
+                <p>Please send DMCA notices to: <strong>dmca@yourdomain.example</strong> <!-- F-07: TODO replace with your real DMCA mailbox --></p>
             </div>
             <button class="btn btn-primary btn-sm" style="margin-top: 1.5rem; width: 100%;"
-                onclick="document.getElementById('dmcaModal').classList.remove('active')">CLOSE</button>
+                data-action="close-dmca">CLOSE</button>
         </div>
     </div>
 
@@ -517,7 +534,7 @@
                 <div class="modal-tab-content" id="tabEpisodes" role="tabpanel">
                     <div class="episode-progress-banner" id="episodeProgressBanner" style="display:none"></div>
                     <div class="season-select-row" id="seasonPills" role="group" aria-label="Season selection"></div>
-                    <div class="episode-list" id="episodeList" role="list"></div>
+                    <div class="episode-list" id="episodeList"></div>
                 </div>
                 <div class="modal-tab-content" id="tabSimilar" role="tabpanel">
                     <div class="similar-grid" id="similarGrid"></div>
@@ -533,9 +550,32 @@
                     </div>
                     <div class="reviews-list" id="reviewsList" role="list"></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Theater Player — centered cinema-mode overlay (owns the player section) -->
+    <div class="theater-overlay" id="theaterOverlay" role="dialog" aria-modal="true" aria-label="Video player">
+        <div class="theater-backdrop" data-theater-close aria-hidden="true"></div>
+        <div class="theater-stage-wrap">
+            <header class="theater-header">
+                <div class="theater-heading">
+                    <h3 class="theater-title" id="theaterTitle">Now Playing</h3>
+                    <span class="theater-badge" id="theaterMeta"></span>
+                </div>
+                <div class="theater-header-actions">
+                    <button class="theater-btn" id="theaterDetailsBtn" title="Back to details">ℹ DETAILS</button>
+                    <button class="theater-btn theater-btn-accent" id="theaterCloseBtn" aria-label="Close player">✕ CLOSE</button>
+                </div>
+            </header>
+            <div class="theater-stage" id="theaterStage">
+                <div class="theater-idle" id="theaterIdle" aria-hidden="true">
+                    <div class="theater-idle-icon">▶</div>
+                    <p class="theater-idle-text">Press PLAY to start streaming</p>
+                </div>
                 <div class="modal-player-section" id="playerSection" style="display:none">
                     <div class="player-container">
-                        <iframe id="videoPlayer" allowfullscreen title="Video player"
+                        <iframe id="videoPlayer" allowfullscreen title="Video player" sandbox="allow-scripts allow-same-origin"
                             allow="autoplay; fullscreen"></iframe>
                     </div>
                     <div class="quality-selector" id="qualitySelector" role="group" aria-label="Video quality">
@@ -558,6 +598,14 @@
                     </div>
                 </div>
             </div>
+            <footer class="theater-controls">
+                <span class="theater-hint" aria-hidden="true">ESC to exit</span>
+                <div class="theater-controls-actions">
+                    <button class="theater-btn" data-action="toggle-mini-player" title="Pop out to mini player">⊡
+                        MINI</button>
+                    <button class="theater-btn" id="theaterFsBtn" title="Toggle fullscreen">⛶ FULLSCREEN</button>
+                </div>
+            </footer>
         </div>
     </div>
 
@@ -565,7 +613,7 @@
     <div class="trailer-overlay" id="trailerModal" role="dialog" aria-modal="true" aria-label="Trailer">
         <div class="trailer-container">
             <button class="trailer-close" id="trailerClose" aria-label="Close trailer">✕</button>
-            <iframe id="trailerPlayer" allowfullscreen title="Trailer player" allow="autoplay; fullscreen"></iframe>
+            <iframe id="trailerPlayer" allowfullscreen title="Trailer player" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin"></iframe>
         </div>
     </div>
 
@@ -587,7 +635,7 @@
                     </svg></button>
             </div>
         </div>
-        <iframe id="miniPlayerFrame" allowfullscreen title="Mini video player" allow="autoplay; fullscreen"></iframe>
+        <iframe id="miniPlayerFrame" allowfullscreen title="Mini video player" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin"></iframe>
     </div>
 
     <!-- AI Concierge Chat -->
@@ -621,26 +669,30 @@
         <div class="shortcuts-modal">
             <h3 class="shortcuts-title">KEYBOARD SHORTCUTS</h3>
             <div class="shortcut-row"><span class="shortcut-desc">Search</span>
+                <div class="shortcut-keys"><span class="shortcut-key">/</span>
+                </div>
+            </div>
+            <div class="shortcut-row"><span class="shortcut-desc">Command palette</span>
                 <div class="shortcut-keys"><span class="shortcut-key">Ctrl</span><span class="shortcut-key">K</span>
                 </div>
             </div>
             <div class="shortcut-row"><span class="shortcut-desc">Close</span>
                 <div class="shortcut-keys"><span class="shortcut-key">Esc</span></div>
             </div>
-            <div class="shortcut-row"><span class="shortcut-desc">Mini player</span>
+            <div class="shortcut-row"><span class="shortcut-desc">Mini player (title open)</span>
                 <div class="shortcut-keys"><span class="shortcut-key">M</span></div>
             </div>
-            <div class="shortcut-row"><span class="shortcut-desc">Add to watchlist</span>
+            <div class="shortcut-row"><span class="shortcut-desc">Watchlist (title open)</span>
                 <div class="shortcut-keys"><span class="shortcut-key">W</span></div>
             </div>
-            <div class="shortcut-row"><span class="shortcut-desc">Play trailer</span>
+            <div class="shortcut-row"><span class="shortcut-desc">Play trailer (title open)</span>
                 <div class="shortcut-keys"><span class="shortcut-key">T</span></div>
             </div>
             <div class="shortcut-row"><span class="shortcut-desc">Toggle theme</span>
                 <div class="shortcut-keys"><span class="shortcut-key">D</span></div>
             </div>
             <div class="shortcut-row"><span class="shortcut-desc">Surprise Me</span>
-                <div class="shortcut-keys"><span class="shortcut-key">S</span></div>
+                <div class="shortcut-keys"><span class="shortcut-key">Shift</span><span class="shortcut-key">S</span></div>
             </div>
             <div class="shortcut-row"><span class="shortcut-desc">AI Concierge</span>
                 <div class="shortcut-keys"><span class="shortcut-key">A</span></div>
@@ -721,11 +773,7 @@
     <script src="profile-pin.js"></script>
     <script src="i18n.js"></script>
     <script src="csv-import.js"></script>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
-      }
-    </script>
+    <script src="sw-register.js"></script>
 </body>
 
 </html>

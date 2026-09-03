@@ -1,23 +1,29 @@
 // VOID Streaming Service Worker
-// Provides offline functionality, caching, and background sync
+// Provides offline functionality and caching.
+// F-01: every script the page loads is precached now — the shell used to list
+// only app.js/styles.css, so an offline reload lost the focus manager, resume
+// dialog, palette, PIN gate and the rest of the 11 feature modules. The
+// content handler also returns a real 503 instead of `null` (which
+// respondWith() rejects with a TypeError) when the network is unavailable.
+// F-02: dead strategies removed — the write-never CACHE_NAME/STATIC_CACHE
+// pair, the four no-op background-sync stubs, the push/periodicsync handlers
+// with no client-side subscription flow, and the SW-internal trending
+// prefetch that discarded its own response. The dynamic cache is trimmed on
+// activate so it can no longer grow without bound.
 
-const CACHE_NAME = 'void-cache-v1';
-const STATIC_CACHE = 'void-static-v1';
-const DYNAMIC_CACHE = 'void-dynamic-v1';
-const CACHE = 'void-v1';
-const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/logo.svg', '/favicon.svg', '/manifest.webmanifest'];
+const CACHE = 'void-shell-v6';
+const DYNAMIC_CACHE = 'void-dynamic-v4';
+const DYNAMIC_CACHE_MAX = 120;
 
-// Assets to cache immediately on install
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/styles.css',
-  '/manifest.webmanifest',
-  '/favicon.svg',
-  '/logo.svg',
-  '/robots.txt',
-  '/sitemap.xml'
+// F-01: relative URLs resolve against the SW's own directory, so this works
+// at the domain root AND from subpath deployments.
+const SHELL = [
+  './', './index.html', './styles.css', './app.js', './logo.svg', './favicon.svg',
+  './manifest.webmanifest', './robots.txt', './sitemap.xml',
+  // F-01: the 11 feature modules the page loads besides app.js
+  './a11y.js', './resume-dialog.js', './share-card.js', './watchlist-share.js',
+  './command-palette.js', './diary-depth.js', './genre-mashup.js',
+  './profile-pin.js', './i18n.js', './csv-import.js', './sw-register.js'
 ];
 
 // Images domain for caching
@@ -25,42 +31,50 @@ const IMAGE_DOMAINS = [
   'https://image.tmdb.org'
 ];
 
-// Install event - cache static assets + shell (P2 offline shell)
+// Install event - cache the full offline shell (P2 + F-01)
 self.addEventListener('install', (event) => {
   console.log('[ServiceWorker] Install');
   event.waitUntil(
     caches.open(CACHE).then((cache) => {
-      console.log('[ServiceWorker] Caching shell');
+      console.log('[ServiceWorker] Caching offline shell (all modules)');
       return cache.addAll(SHELL);
-    }).then(() => caches.open(STATIC_CACHE).then((cache) => {
-      console.log('[ServiceWorker] Caching static assets');
-      return cache.addAll(STATIC_ASSETS);
-    })).then(() => {
+    }).then(() => {
       console.log('[ServiceWorker] Skip waiting');
       self.skipWaiting();
     })
   );
 });
 
-// Activate event - clean up old caches
+// Activate event - clean up old caches, trim the dynamic cache
 self.addEventListener('activate', (event) => {
   console.log('[ServiceWorker] Activate');
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE && cacheName !== STATIC_CACHE && cacheName !== DYNAMIC_CACHE && cacheName !== CACHE_NAME) {
+          if (cacheName !== CACHE && cacheName !== DYNAMIC_CACHE) {
             console.log('[ServiceWorker] Removing old cache:', cacheName);
             return caches.delete(cacheName);
           }
         })
       );
-    }).then(() => {
+    }).then(() => trimCache(DYNAMIC_CACHE, DYNAMIC_CACHE_MAX)).then(() => {
       console.log('[ServiceWorker] Claiming clients');
       self.clients.claim();
     })
   );
 });
+
+// F-02: cap a cache's entry count (oldest entries evicted first)
+async function trimCache(name, max) {
+  try {
+    const cache = await caches.open(name);
+    const keys = await cache.keys();
+    if (keys.length <= max) return;
+    await Promise.all(keys.slice(0, keys.length - max).map((k) => cache.delete(k)));
+    console.log('[ServiceWorker] Trimmed', name, 'to', max, 'entries');
+  } catch (err) { console.log('[ServiceWorker] trimCache failed:', err); }
+}
 
 // Fetch event - serve from cache, fallback to network
 self.addEventListener('fetch', (event) => {
@@ -77,8 +91,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // P2: always network for Netlify functions/APIs
-  if (url.pathname.startsWith('/.netlify/')) return;
+  // P5-8: Netlify functions/APIs — network first, fall back to cached responses
+  // so recently-fetched content stays available offline.
+  if (url.pathname.startsWith('/.netlify/')) {
+    event.respondWith(handleApiRequest(request));
+    return;
+  }
+
+  // P5-8: navigations — network first, fall back to the cached shell (SPA)
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((res) => {
+          if (res.ok) caches.open(CACHE).then((c) => c.put('./index.html', res.clone())).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match('./index.html').then((hit) => hit || caches.match('./')))
+    );
+    return;
+  }
 
   // Handle cross-origin API requests with network-first caching
   // (must come BEFORE the generic cross-origin passthrough)
@@ -105,7 +136,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // P2: shell assets — stale-while-revalidate from CACHE
-  if (SHELL.includes(url.pathname) || url.pathname === '/') {
+  if (SHELL.includes(url.pathname) || SHELL.includes('./' + url.pathname.split('/').pop()) || url.pathname === '/') {
     event.respondWith(caches.open(CACHE).then(async c => {
       const hit = await c.match(event.request);
       const net = fetch(event.request).then(res => { if (res.ok) c.put(event.request, res.clone()); return res; }).catch(() => hit);
@@ -163,7 +194,12 @@ async function handleContentRequest(request) {
     return networkResponse;
   }).catch(() => {
     console.log('[ServiceWorker] Network fetch failed for:', request.url);
-    return null;
+    // F-01: this used to return null, which respondWith() rejects with a
+    // TypeError — every offline request for a non-precached asset errored.
+    return new Response('Service unavailable', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain' }
+    });
   });
 
   // Return cached response immediately if available, otherwise wait for network
@@ -173,75 +209,6 @@ async function handleContentRequest(request) {
 
   return fetchPromise;
 }
-
-// Background sync for offline actions
-self.addEventListener('sync', (event) => {
-  console.log('[ServiceWorker] Sync event:', event.tag);
-
-  if (event.tag === 'sync-watchlist') {
-    event.waitUntil(syncWatchlist());
-  } else if (event.tag === 'sync-diary') {
-    event.waitUntil(syncDiary());
-  } else if (event.tag === 'sync-profiles') {
-    event.waitUntil(syncProfiles());
-  }
-});
-
-// Sync watchlist when back online
-async function syncWatchlist() {
-  console.log('[ServiceWorker] Syncing watchlist...');
-  // This would sync local watchlist changes with server
-  // For now, we just log it
-  return Promise.resolve();
-}
-
-// Sync diary entries when back online
-async function syncDiary() {
-  console.log('[ServiceWorker] Syncing diary...');
-  return Promise.resolve();
-}
-
-// Sync profile changes when back online
-async function syncProfiles() {
-  console.log('[ServiceWorker] Syncing profiles...');
-  return Promise.resolve();
-}
-
-// Push notifications support
-self.addEventListener('push', (event) => {
-  console.log('[ServiceWorker] Push received');
-
-  const options = {
-    body: event.data ? event.data.text() : 'New content available!',
-    icon: '/favicon.svg',
-    badge: '/favicon.svg',
-    vibrate: [100, 50, 100],
-    data: {
-      dateOfArrival: Date.now(),
-      primaryKey: 1
-    },
-    actions: [
-      { action: 'explore', title: 'Explore Now' },
-      { action: 'close', title: 'Close' }
-    ]
-  };
-
-  event.waitUntil(
-    self.registration.showNotification('VOID Streaming', options)
-  );
-});
-
-// Notification click handler
-self.addEventListener('notificationclick', (event) => {
-  console.log('[ServiceWorker] Notification click:', event.action);
-  event.notification.close();
-
-  if (event.action === 'explore') {
-    event.waitUntil(
-      clients.openWindow('/')
-    );
-  }
-});
 
 // Message handler for communication with main app
 self.addEventListener('message', (event) => {
@@ -263,24 +230,5 @@ self.addEventListener('message', (event) => {
     );
   }
 });
-
-// Periodic background sync (if supported)
-self.addEventListener('periodicsync', (event) => {
-  console.log('[ServiceWorker] Periodic sync:', event.tag);
-
-  if (event.tag === 'update-trending') {
-    event.waitUntil(updateTrendingContent());
-  }
-});
-
-async function updateTrendingContent() {
-  console.log('[ServiceWorker] Updating trending content in background...');
-  // Pre-fetch trending content via the Netlify proxy for faster load next time
-  try {
-    await fetch('/.netlify/functions/tmdb?path=/trending/all/day');
-  } catch (error) {
-    console.log('[ServiceWorker] Failed to pre-fetch trending:', error);
-  }
-}
 
 console.log('[ServiceWorker] Service Worker loaded');
