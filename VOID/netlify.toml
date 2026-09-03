@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+
+# SPA fallback (functions are matched before redirects)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
