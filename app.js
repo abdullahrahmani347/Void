@@ -140,7 +140,8 @@ script.textContent = JSON.stringify(schema);
 const Store = {
 get(key, def = []) { try { return JSON.parse(localStorage.getItem('void_' + key)) ?? def; } catch { return def; } },
 set(key, val) { try { localStorage.setItem('void_' + key, JSON.stringify(val)); } catch (e) { console.warn('Storage error', e); } },
-getTheme() { return localStorage.getItem('void_theme') || 'dark'; }
+// A4: first visit follows the OS preference; an explicit toggle always wins.
+getTheme() { const t = localStorage.getItem('void_theme'); if (t === 'dark' || t === 'light') return t; return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
 };
 
 // ============ FOCUS TRAP ============
@@ -187,16 +188,28 @@ if (prev && typeof prev.focus === 'function' && prev.isConnected) setTimeout(() 
 // user-derived string (e.g. a custom list name containing <img …>) became live
 // DOM. The template below is now static markup; the dynamic part is assigned
 // via textContent, which renders every caller's input as literal text.
-function toast(message, type = 'info') {
+// A6: Toast 2.0 — optional action button (e.g. Undo), max 3 stacked, pause
+// on hover so the action is reachable. Message text still assigned via
+// textContent (S-04) — never interpolated as HTML.
+function toast(message, type = 'info', action = null) {
 const c = document.getElementById('toastContainer');
+while (c.children.length >= 3) c.firstElementChild.remove();
 const icons = { success: '✓', error: '✕', info: 'ℹ', warning: '⚠' };
 const t = document.createElement('div');
 t.className = `toast ${type}`;
 t.setAttribute('role', 'alert');
-t.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[type] || icons.info}</span><span class="toast-message"></span><button class="toast-close" aria-label="Dismiss notification" data-action="toast-close">×</button><div class="toast-progress" aria-hidden="true"></div>`;
+t.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[type] || icons.info}</span><span class="toast-message"></span>${action ? '<button type="button" class="toast-action"></button>' : ''}<button class="toast-close" aria-label="Dismiss notification" data-action="toast-close">×</button><div class="toast-progress" aria-hidden="true"></div>`;
 t.querySelector('.toast-message').textContent = message; // S-04: never HTML
+const life = action ? 6000 : 3200;
+const bar = t.querySelector('.toast-progress');
+if (bar && action) bar.style.animationDuration = life + 'ms';
+let timer = setTimeout(remove, life);
+function remove() { clearTimeout(timer); t.remove(); }
+t.addEventListener('mouseenter', () => { clearTimeout(timer); if (bar) bar.style.animationPlayState = 'paused'; });
+t.addEventListener('mouseleave', () => { if (bar) bar.style.animationPlayState = 'running'; timer = setTimeout(remove, 1200); });
+t.querySelector('.toast-close').addEventListener('click', remove);
+if (action) { const b = t.querySelector('.toast-action'); b.textContent = action.label; b.addEventListener('click', () => { remove(); try { action.fn(); } catch (e) {} }); }
 c.appendChild(t);
-setTimeout(() => t.remove(), 3200);
 }
 
 // ============ THEME ============
@@ -210,10 +223,13 @@ subscribe(key, fn) { (this._listeners[key] ||= []).push(fn); return () => { this
 publish(key, payload) { (this._listeners[key] || []).forEach(fn => { try { fn(payload); } catch (e) { try { ErrorMonitor.handleError({ message: e?.message || String(e), source: `VoidStore.publish:${key}`, stack: e?.stack, type: 'ui' }); } catch (_) {} } }); }
 };
 window.VoidStore = VoidStore;
+// A4: keep the browser UI chrome (meta theme-color) in sync with the theme.
+function syncThemeColor(theme) { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', theme === 'light' ? '#f5f5f7' : '#030303'); }
 function initTheme() {
 const theme = Store.getTheme();
 document.documentElement.setAttribute('data-theme', theme);
 updateThemeIcon(theme);
+syncThemeColor(theme);
 document.getElementById('themeToggle').addEventListener('click', toggleTheme);
 }
 function toggleTheme() {
@@ -222,6 +238,7 @@ const next = current === 'dark' ? 'light' : 'dark';
 document.documentElement.setAttribute('data-theme', next);
 localStorage.setItem('void_theme', next);
 updateThemeIcon(next);
+syncThemeColor(next);
 VoidStore.publish('theme:changed', next);
 toast(`${next.charAt(0).toUpperCase() + next.slice(1)} mode activated`, 'info');
 }
@@ -669,6 +686,26 @@ requestAnimationFrame(() => { region.textContent = message; });
 function initLiveRegions() {
 document.querySelectorAll('.scroll-row, #episodeList, #similarGrid').forEach(r => { if (!r.getAttribute('aria-live')) r.setAttribute('aria-live', 'polite'); });
 }
+// A2: smooth overlay transitions via the View Transitions API when supported
+// (graceful fallback: the existing CSS transitions just run as before).
+function withViewTransition(fn) {
+if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { fn(); return; }
+try { document.startViewTransition(fn); } catch (e) { fn(); }
+}
+// A2: staggered card reveal — a row's cards fade/slide in as the row enters
+// the viewport (IntersectionObserver), with per-card delay via --d and a
+// 1.5s failsafe so content can never stay invisible.
+const revealObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+entries.forEach(en => { if (en.isIntersecting) { en.target.classList.remove('reveal-pending'); en.target.classList.add('cards-in'); revealObserver.unobserve(en.target); } });
+}, { rootMargin: '150px 0px' }) : null;
+function revealCards(c) {
+if (!c) return;
+if (!revealObserver || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { c.classList.add('cards-in'); return; }
+c.classList.remove('cards-in');
+c.classList.add('reveal-pending');
+revealObserver.observe(c);
+setTimeout(() => { c.classList.remove('reveal-pending'); c.classList.add('cards-in'); }, 1500);
+}
 function renderSkeletons(id, count) {
 const c = document.getElementById(id);
 if (c) { c.setAttribute('aria-busy', 'true'); c.innerHTML = Array(count).fill('').map(() => `<div class="skeleton-card" aria-hidden="true"><div class="skeleton skeleton-poster"></div><div class="skeleton skeleton-text" style="width:80%"></div><div class="skeleton skeleton-text" style="width:50%"></div></div>`).join(''); }
@@ -701,7 +738,7 @@ const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
 const posterSm = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
 const mediaKind = type === 'movie' ? 'movie' : 'TV show';
 if (opts.top10) {
-return `<button type="button" class="top10-card" aria-label="#${opts.rank} ${t} — ${mediaKind}" data-action="open-media" data-id="${id}" data-type="${type}">
+return `<button type="button" class="top10-card" style="--d:${opts.d || 0}ms" aria-label="#${opts.rank} ${t} — ${mediaKind}" data-action="open-media" data-id="${id}" data-type="${type}">
   <div class="top10-number" aria-hidden="true">${opts.rank}</div>
   <img class="top10-poster" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="130px" alt="${t} — ${mediaKind} poster" loading="lazy">
   <div class="top10-info"><div class="top10-title">${t}</div><div class="top10-meta">${item.vote_average ? item.vote_average.toFixed(1) + ' ★' : ''}</div></div>
@@ -713,7 +750,7 @@ const isFav = watchlist.some(w => String(w.id) === String(id) && w.type === type
 const cw = continueW.find(w => String(w.id) === String(id) && w.type === type); // V-02
 const progress = cw ? cw.progress : (item.progress || 0);
 const genres = (item.genre_ids || []).slice(0, 2).map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
-return `<div class="card-wrap">
+return `<div class="card-wrap" style="--d:${opts.d || 0}ms">
 <button type="button" class="content-card" aria-label="${t} — ${mediaKind}, ${year}, rated ${rating} out of 10" data-action="open-media" data-id="${id}" data-type="${type}">
 <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="(max-width: 600px) 185px, 342px" alt="${t} — ${mediaKind} poster, ${year}" class="card-poster" loading="lazy">
 ${item._isNew ? '<span class="new-badge" aria-hidden="true">NEW</span>' : ''}
@@ -739,21 +776,21 @@ ${progress > 0 ? `<div class="progress-bar" aria-hidden="true"><div class="progr
 </div>`;
 }
 function renderContentRowHTML(items) {
-if (!items.length) return '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:0.5rem">📭</div>Nothing here yet — try browsing a genre or mood</div>';
 const watchlist = Store.get('watchlist');
 const continueW = Store.get('continue_watching');
-return items.slice(0, 20).map(item => buildCardHTML(item, { watchlist, continueW })).join('');
+return items.slice(0, 20).map((item, i) => buildCardHTML(item, { watchlist, continueW, d: (i % 10) * 45 })).join('');
 }
 function renderContentRow(containerId, items, append = false) {
 const c = document.getElementById(containerId);
 if (!c) return;
-if (!items.length) { c.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:0.5rem">📭</div>Nothing here yet — try browsing a genre or mood</div>'; c.setAttribute('aria-busy', 'false'); return; }
+if (!items.length) { c.innerHTML = '<div class="empty-state" role="status">Nothing here yet — try browsing a genre or mood</div>'; c.setAttribute('aria-busy', 'false'); return; }
 const html = renderContentRowHTML(items);
 if (append) { c.insertAdjacentHTML('beforeend', html); } else { c.innerHTML = html; }
 c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 initHoverTrailerPreviews(c);
 observeImages(c);
+revealCards(c); // A2: staggered entrance
 }
 
 // ============ SHARED TRAILER PREVIEW ============
@@ -1066,22 +1103,24 @@ const c = document.getElementById('newThisWeek');
 if (!c) return;
 renderSkeletons('newThisWeek', 8);
 const watchlist = Store.get('watchlist'), continueW = Store.get('continue_watching');
-c.innerHTML = data.slice(0, 15).map(item => buildCardHTML({ ...item, media_type: 'movie', _isNew: true }, { watchlist, continueW })).join('');
+c.innerHTML = data.slice(0, 15).map((item, i) => buildCardHTML({ ...item, media_type: 'movie', _isNew: true }, { watchlist, continueW, d: (i % 10) * 45 })).join('');
 c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 initHoverTrailerPreviews(c);
 observeImages(c);
+revealCards(c);
 } catch (e) { renderSectionError('newThisWeek', () => loadNewThisWeek()); }
 }
 function renderTop10(items) {
 const c = document.getElementById('top10Row');
 if (!c) return;
-if (!items.length) { c.innerHTML = '<div style="padding:1rem;color:var(--text-muted);white-space:nowrap">No data</div>'; return; }
+if (!items.length) { c.innerHTML = '<div class="empty-state" role="status">No trending titles right now — check back soon.</div>'; return; }
 // Q-05: ranked layout comes from the shared builder's top10 branch.
-c.innerHTML = items.slice(0, 10).map((item, i) => buildCardHTML(item, { top10: true, rank: i + 1 })).join('');
+c.innerHTML = items.slice(0, 10).map((item, i) => buildCardHTML(item, { top10: true, rank: i + 1, d: (i % 10) * 45 })).join('');
 c.setAttribute('aria-busy', 'false');
 initDragScroll(c);
 observeImages(c);
+revealCards(c);
 }
 
 // ============ SHARE ============
@@ -1575,9 +1614,12 @@ const seq = ++state.openSeq; // L-05: each open gets a token; stale responses ar
 state.mediaId = id; state.mediaType = type;
 setRoute(id, type);
 const modal = document.getElementById('detailModal');
+// A2: open the modal inside a View Transition when the API is available.
+withViewTransition(() => {
 modal.classList.add('active');
-document.body.style.overflow = 'hidden';
 setTimeout(() => modal.classList.add('visible'), 10);
+});
+document.body.style.overflow = 'hidden';
 trapFocus(modal.querySelector('.modal-container'));
 document.querySelectorAll('.modal-tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
 document.querySelectorAll('.modal-tab-content').forEach(c => c.classList.remove('active'));
@@ -2328,6 +2370,17 @@ const observer = new IntersectionObserver(entries => {
 entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); observer.unobserve(entry.target); } });
 }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
 document.querySelectorAll('.content-section').forEach(section => observer.observe(section));
+// A3: scrollspy — highlight the navbar link of the section in view.
+const navLinks = document.querySelectorAll('.nav-links a');
+const spy = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+entries.forEach(en => {
+const link = en.target.id ? document.querySelector(`.nav-links a[href="#${en.target.id}"]`) : null;
+if (!link) return;
+if (en.isIntersecting) { navLinks.forEach(a => a.classList.remove('active')); link.classList.add('active'); }
+});
+}, { rootMargin: '-40% 0px -55% 0px' }) : null;
+if (spy) ['movies', 'tv-shows', 'genres', 'myWatchlistSection', 'collectionsSection', 'diarySection'].forEach(id => { const s = document.getElementById(id); if (s) spy.observe(s); });
+window.addEventListener('scroll', () => { if (window.scrollY < 200) navLinks.forEach(a => a.classList.remove('active')); }, { passive: true });
 }
 
 // ============ PARALLAX ============

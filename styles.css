@@ -927,3 +927,90 @@ backdrop-filter:blur(20px)
   .card-action-btn svg { width: 16px; height: 16px; }
   .card-actions { gap: 3px; }
 }
+
+/* =====================================================================
+   PHASE 1 — WORKSTREAM A: visual system upgrade (A2/A3/A4/A5/A6/A7)
+   ===================================================================== */
+
+/* ===== A3: animated active-section underline on desktop nav ===== */
+@media (min-width: 768px) {
+  .nav-links a::after {
+    content: ''; position: absolute; left: 0; right: 100%; bottom: 6px;
+    height: 2px; border-radius: 2px; background: var(--accent);
+    transition: right 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .nav-links a:hover::after,
+  .nav-links a:focus-visible::after,
+  .nav-links a.active::after { right: 0; }
+}
+
+/* ===== A2: hero Ken Burns — animates the standalone `scale` property so it
+   composes with the scroll parallax writing `transform` (no property fight).
+   Only the ACTIVE slide animates, so at most one backdrop repaints. ===== */
+@supports (scale: 1) {
+  @media (prefers-reduced-motion: no-preference) {
+    .banner-slide.active .banner-backdrop { animation: kenBurns 18s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
+  }
+}
+@keyframes kenBurns { from { scale: 1.05; } to { scale: 1.16; } }
+
+/* ===== A2: staggered card reveal =====
+   Rows start .reveal-pending (children invisible); the reveal observer swaps
+   in .cards-in and each card animates with its per-card --d delay. The
+   keyframe intentionally has NO `to` frame — after the animation the element
+   returns to its underlying computed style, so :hover transforms keep
+   working. A 1.5s JS failsafe guarantees .cards-in even if IO never fires. */
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-row.reveal-pending > * { opacity: 0; }
+  .scroll-row.cards-in > * { animation: cardIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: var(--d, 0ms); }
+}
+@keyframes cardIn { from { opacity: 0; transform: translateY(14px); } }
+
+/* ===== A2/A7: cinematic gradient title treatment =====
+   Gradient text needs the shadow removed (a text-shadow under a transparent
+   fill looks smudged) — use a drop-shadow filter instead. */
+.banner-title, .modal-title {
+  background: linear-gradient(180deg, #ffffff 25%, rgba(255, 255, 255, 0.72) 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  text-shadow: none; filter: drop-shadow(0 2px 18px rgba(0, 0, 0, 0.45));
+}
+[data-theme="light"] .modal-title {
+  background-image: linear-gradient(180deg, #14141a 25%, rgba(20, 20, 26, 0.78) 100%);
+}
+/* A4: the hero stays CINEMATIC DARK in both themes — photographs with a
+   dark gradient + white text are unreadable with a light fade (verified in
+   browser). Re-scoping these custom properties on the banner flips every
+   descendant (title, meta, overview, dots) to the dark palette at once. */
+[data-theme="light"] .featured-banner {
+  --bg-base: #030303;
+  --text-primary: #fff;
+  --text-secondary: rgba(255, 255, 255, 0.85);
+  --text-muted: rgba(255, 255, 255, 0.7);
+}
+
+/* ===== A2: subtle View Transitions crossfade (modal open) ===== */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.28s; }
+
+/* ===== A4: light-theme fixes for components with hardcoded darks ===== */
+[data-theme="light"] .banner-skeleton { background: linear-gradient(120deg, #e4e4ea, #f0f0f4, #e4e4ea); }
+[data-theme="light"] .sk-pill, [data-theme="light"] .sk-line { background: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .sk-btn { background: rgba(227, 0, 27, 0.2); }
+[data-theme="light"] .offline-banner { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
+
+/* ===== A5: empty states with SVG art (replaces bare emoji rows) ===== */
+.empty-state { flex-direction: column; gap: 0.75rem; }
+.empty-state::before {
+  content: ''; width: 64px; height: 64px; opacity: 0.55; flex: none;
+  background: center/contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 24 24' fill='none' stroke='%236b7080' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 11h16v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z'/%3E%3Cpath d='M3.6 7.2 20.2 4l.4 3.1L4 10.3z'/%3E%3Cpath d='m7.5 9.6 2-3.1M11.5 8.9l2-3.1M15.5 8.2l2-3.1'/%3E%3C/svg%3E");
+}
+.scroll-row .empty-state { flex: 1 1 100%; }
+
+/* ===== A6: toast action button (Undo etc.) ===== */
+.toast-action {
+  background: none; border: 1px solid var(--border-card); color: var(--accent);
+  font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.05em;
+  padding: 0.35rem 0.7rem; border-radius: 999px; cursor: pointer;
+  transition: all var(--transition); flex-shrink: 0; min-height: 32px; min-width: 44px;
+}
+.toast-action:hover, .toast-action:focus-visible { border-color: var(--accent); background: rgba(227, 0, 27, 0.12); outline: none; }
