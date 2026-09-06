@@ -856,3 +856,74 @@ backdrop-filter:blur(20px)
 
 /* ===== Mini player (PiP) accent ===== */
 .mini-player{border-top:2px solid var(--accent)}
+
+/* =====================================================================
+   Mobile / touch fixes (M-01 .. M-03)
+   ===================================================================== */
+
+/* ===== M-01: play affordance must exist without hover =====
+   The poster overlay (title + play button) was opacity:0 by default and was
+   only revealed by a :hover rule inside @media (min-width:1024px). Touch
+   devices never hover — and viewports below 1024px had no reveal rule at all
+   — so phones, tablets and even large tablets (iPad Pro) showed bare posters
+   with no play button. Show the overlay whenever hover is unavailable or the
+   screen is small; mouse users on large screens keep the hover-reveal. */
+@media (max-width: 1023px), (hover: none), (pointer: coarse) {
+  .card-overlay { opacity: 1; }
+}
+.content-card:focus-visible .card-overlay,
+.content-card:focus-within .card-overlay { opacity: 1; }
+@media (hover: none) and (min-width: 1024px) {
+  /* hover-gated heart/plus actions on big touch devices (iPad Pro landscape) */
+  .card-actions { opacity: 1; }
+}
+
+/* ===== M-02: detail-modal hero on small screens =====
+   Fixed 250px hero + bottom-anchored absolute content: on phones the
+   full-width stacked action buttons overflowed upward and were clipped by
+   overflow:hidden — PLAY / TRAILER / WATCHLIST were rendered off-hero and
+   invisible. Let the hero size to its content and flow normally instead. */
+@media (max-width: 640px) {
+  .modal-hero { height: auto; }
+  .modal-hero-content {
+    position: relative; inset: auto;
+    padding: 1.25rem 1rem;
+    flex-direction: column; align-items: center; text-align: center; gap: 0.75rem;
+  }
+  .modal-hero-info { display: flex; flex-direction: column; align-items: center; width: 100%; }
+  .modal-meta, .modal-genres { justify-content: center; }
+  .modal-actions { width: 100%; justify-content: center; gap: 0.5rem; }
+  .modal-actions .btn { flex: 1 1 calc(50% - 0.25rem); min-width: 0; }
+}
+
+/* ===== M-03: navbar must fit small viewports =====
+   Five 44px icon buttons + logo + gaps = ~398px, wider than a 393px phone:
+   the hamburger (the primary mobile nav control) was pushed off-screen.
+   Compact the buttons and drop the keyboard-shortcut button on touch. */
+@media (max-width: 640px) {
+  .navbar { padding: 0.35rem 0.6rem; }
+  .nav-left { gap: 0.5rem; }
+  .nav-logo-img { height: 24px; }
+  .nav-right { gap: 0.25rem; }
+  .nav-icon-btn { width: 38px; height: 38px; }
+  .nav-icon-btn svg { width: 18px; height: 18px; }
+  #shortcutsBtn { display: none; } /* keyboard shortcuts are meaningless on touch */
+}
+@media (max-width: 400px) {
+  .navbar { padding: 0.35rem 0.4rem; }
+  .nav-logo-img { height: 22px; }
+  .nav-icon-btn { width: 34px; height: 34px; }
+  /* profile pill: avatar only — the name label doesn't fit beside the icons */
+  .profile-avatar-btn { padding: 0.3rem; gap: 0; }
+  .profile-avatar-name { display: none; }
+}
+
+/* ===== M-04: compact card corner actions on small screens =====
+   44px circles permanently visible on touch cards crowded 130-150px posters
+   (heart + share + diary covered the top third). Keep 44px touch targets but
+   shrink the visual footprint and tighten stacking on phones. */
+@media (max-width: 640px) {
+  .card-action-btn { width: 34px; height: 34px; }
+  .card-action-btn svg { width: 16px; height: 16px; }
+  .card-actions { gap: 3px; }
+}

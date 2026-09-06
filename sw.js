@@ -11,8 +11,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v6';
-const DYNAMIC_CACHE = 'void-dynamic-v4';
+const CACHE = 'void-shell-v7'; // v7: mobile play-button + responsive fixes (M-01..M-04)
+const DYNAMIC_CACHE = 'void-dynamic-v5';
 const DYNAMIC_CACHE_MAX = 120;
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
