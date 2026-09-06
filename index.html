@@ -575,8 +575,13 @@
                 </div>
                 <div class="modal-player-section" id="playerSection" style="display:none">
                     <div class="player-container">
-                        <iframe id="videoPlayer" allowfullscreen title="Video player" sandbox="allow-scripts allow-same-origin"
-                            allow="autoplay; fullscreen"></iframe>
+                        <!-- P-09: no sandbox attribute - the vidking embed refuses to run inside ANY
+                             sandbox (its detector fires on the attribute's mere existence, see
+                             frameElement.hasAttribute("sandbox") in their bundle). Risk is bounded by
+                             CSP frame-src locking frames to www.vidking.net / YouTube only, and by the
+                             hardcoded src URLs (TMDB ids only - no user input in the URL). -->
+                        <iframe id="videoPlayer" allowfullscreen title="Video player" referrerpolicy="no-referrer"
+                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
                     </div>
                     <div class="quality-selector" id="qualitySelector" role="group" aria-label="Video quality">
                         <button class="quality-btn" data-q="360">360p</button>
@@ -613,7 +618,8 @@
     <div class="trailer-overlay" id="trailerModal" role="dialog" aria-modal="true" aria-label="Trailer">
         <div class="trailer-container">
             <button class="trailer-close" id="trailerClose" aria-label="Close trailer">✕</button>
-            <iframe id="trailerPlayer" allowfullscreen title="Trailer player" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin"></iframe>
+            <iframe id="trailerPlayer" allowfullscreen title="Trailer player" referrerpolicy="no-referrer"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
         </div>
     </div>
 
@@ -635,7 +641,8 @@
                     </svg></button>
             </div>
         </div>
-        <iframe id="miniPlayerFrame" allowfullscreen title="Mini video player" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin"></iframe>
+        <iframe id="miniPlayerFrame" allowfullscreen title="Mini video player" referrerpolicy="no-referrer"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
     </div>
 
     <!-- AI Concierge Chat -->
