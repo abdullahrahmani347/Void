@@ -11,8 +11,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v8'; // v8: player iframes no longer sandboxed (vidking rejects any sandbox)
-const DYNAMIC_CACHE = 'void-dynamic-v6';
+const CACHE = 'void-shell-v9'; // v9: Phase 1 polish — new tab bar/theater/gesture JS+CSS, valid clamp() type scale
+const DYNAMIC_CACHE = 'void-dynamic-v7';
 const DYNAMIC_CACHE_MAX = 120;
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
