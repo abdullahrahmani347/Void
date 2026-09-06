@@ -369,6 +369,27 @@ banner.addEventListener('mouseleave', resumeBanner);
 banner.addEventListener('focusin', pauseBanner);
 banner.addEventListener('focusout', resumeBanner);
 document.addEventListener('visibilitychange', () => { document.hidden ? pauseBanner() : resumeBanner(); });
+initBannerSwipe(banner);
+}
+// B2: horizontal swipe on the hero flips slides (touch only, no library).
+// Vertical-dominant gestures are ignored so page scroll is never hijacked.
+function initBannerSwipe(banner) {
+// No capability guard: touch listeners are inert on desktop (the events
+// simply never fire) and this keeps the gesture testable everywhere.
+let x0 = 0, y0 = 0, tracking = false;
+banner.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; tracking = true; pauseBanner(); }, { passive: true });
+banner.addEventListener('touchend', e => {
+if (!tracking) return;
+tracking = false;
+const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && state.bannerItems.length) {
+state.bannerIndex = dx < 0
+? (state.bannerIndex + 1) % state.bannerItems.length
+: (state.bannerIndex - 1 + state.bannerItems.length) % state.bannerItems.length;
+updateBannerSlide();
+}
+resumeBanner();
+}, { passive: true });
 }
 function renderBanner() {
 const container = document.getElementById('featuredBanner');
@@ -1445,6 +1466,7 @@ loadAIRecommendations();
     initTheater();
     initKeyboardShortcuts();
     initScrollAnimations();
+    initBottomTabs();
     initParallax();
     initRipple();
     initAIChat();
@@ -1492,6 +1514,46 @@ document.getElementById('profileAvatarBtn').addEventListener('click', showProfil
 // U-01: profileAvatarBtn is a real <button> now — Enter/Space fire click
 // natively, so the old keypress-Enter companion handler (which double-fired)
 // is gone.
+}
+
+// ============ B1: BOTTOM TAB BAR (mobile) ============
+// Persistent thumb-reach navigation ≤767px. Hides on scroll-down past the
+// hero, returns on scroll-up; safe-area aware. Profile opens the switcher.
+function initBottomTabs() {
+const bar = document.getElementById('bottomTabBar');
+if (!bar) return;
+let lastY = 0;
+window.addEventListener('scroll', () => {
+const y = window.scrollY;
+if (Math.abs(y - lastY) < 8) return;
+bar.classList.toggle('hidden', y > lastY && y > 140);
+lastY = y;
+}, { passive: true });
+const setActive = key => {
+bar.querySelectorAll('.tab-btn').forEach(b => { const on = b.dataset.tab === key; b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'true' : 'false'); });
+};
+bar.addEventListener('click', e => {
+const b = e.target.closest('.tab-btn');
+if (!b) return;
+const t = b.dataset.tab;
+if (t === 'home') { window.scrollTo({ top: 0, behavior: 'smooth' }); setActive('home'); }
+else if (t === 'search') { const si = document.getElementById('searchInput'); si.scrollIntoView({ behavior: 'smooth' }); setTimeout(() => si.focus({ preventScroll: true }), 400); setActive('search'); }
+else if (t === 'discover') { document.getElementById('genres')?.scrollIntoView({ behavior: 'smooth' }); setActive('discover'); }
+else if (t === 'watchlist') { document.getElementById('myWatchlistSection')?.scrollIntoView({ behavior: 'smooth' }); setActive('watchlist'); }
+else if (t === 'profile') { showProfileOverlay(); }
+});
+// Light scrollspy: reflect the section the user is browsing.
+if ('IntersectionObserver' in window) {
+const spy = new IntersectionObserver(entries => {
+entries.forEach(en => {
+if (!en.isIntersecting) return;
+const id = en.target.id;
+if (id === 'genres') setActive('discover');
+else if (id === 'myWatchlistSection' || id === 'collectionsSection' || id === 'diarySection') setActive('watchlist');
+});
+}, { rootMargin: '-40% 0px -55% 0px' });
+['genres', 'myWatchlistSection', 'collectionsSection', 'diarySection'].forEach(id => { const s = document.getElementById(id); if (s) spy.observe(s); });
+}
 }
 
 // ============ PULL-TO-REFRESH (P3-6) ============
@@ -1561,6 +1623,37 @@ document.getElementById('nextEpPlayBtn')?.addEventListener('click', () => { clea
 document.getElementById('nextEpCancelBtn')?.addEventListener('click', () => { clearNextEpTimer(); document.getElementById('nextEpOverlay').style.display = 'none'; });
 initReviews();
 initAddToList();
+initModalSwipe(); // B2/B6: swipe-down dismiss on phones
+}
+// B2/B6: on ≤640px the modal acts as a bottom sheet — drag the hero (handle
+// included) downward past ~110px to dismiss. Buttons are excluded so PLAY and
+// friends never trigger a drag; spring-back uses the sheet easing curve.
+function initModalSwipe() {
+const modal = document.getElementById('detailModal');
+const hero = modal.querySelector('.modal-hero');
+const wrap = modal.querySelector('.modal-wrap');
+if (!hero || !wrap) return;
+let y0 = 0, dy = 0, dragging = false;
+const isSheet = () => window.matchMedia('(max-width: 640px)').matches;
+hero.addEventListener('touchstart', e => {
+if (!isSheet() || modal.scrollTop > 0) return;
+if (e.target.closest('button, a, input, textarea, select')) return;
+dragging = true; y0 = e.touches[0].clientY; dy = 0;
+wrap.style.transition = 'none';
+}, { passive: true });
+hero.addEventListener('touchmove', e => {
+if (!dragging) return;
+dy = e.touches[0].clientY - y0;
+if (dy > 0) wrap.style.transform = `translateY(${dy}px)`;
+}, { passive: true });
+hero.addEventListener('touchend', () => {
+if (!dragging) return;
+dragging = false;
+wrap.style.transition = '';
+wrap.style.transform = '';
+if (dy > 110) closeModal();
+});
+hero.addEventListener('touchcancel', () => { dragging = false; wrap.style.transition = ''; wrap.style.transform = ''; });
 }
 // ============ V-02 MIGRATION ============
 // One-time normalization of stored media ids to strings. Fixes data written
@@ -1809,6 +1902,30 @@ scheduleNextEp();
 }
 document.getElementById('videoPlayer').src = url;
 openTheater();
+renderEpisodeChips(); // B4: quick prev/next episode chips (TV only)
+}
+// B4: honest wrapper-level navigation — the vidking iframe is cross-origin so
+// we cannot seek inside it; these chips simply re-request the prev/next
+// episode URL (and are hidden for movies).
+function renderEpisodeChips() {
+const c = document.getElementById('episodeChips');
+if (!c) return;
+if (state.mediaType !== 'tv') { c.hidden = true; c.innerHTML = ''; return; }
+const details = state.currentDetails || {};
+const seasons = (details.seasons || []).filter(s => s.season_number > 0);
+const cur = seasons.find(s => s.season_number === state.season);
+const hasNext = cur ? state.episode < cur.episode_count : false;
+const hasPrev = state.episode > 1 || state.season > 1;
+c.hidden = false;
+c.innerHTML = `
+<button type="button" class="ep-chip" id="epPrevChip" ${hasPrev ? '' : 'disabled'} aria-label="Previous episode">‹ PREV</button>
+<span class="ep-chip ep-chip-label" aria-live="polite">S${state.season} · E${state.episode}</span>
+<button type="button" class="ep-chip" id="epNextChip" ${hasNext ? '' : 'disabled'} aria-label="Next episode">NEXT ›</button>`;
+c.querySelector('#epPrevChip')?.addEventListener('click', () => {
+if (state.episode > 1) playEpisode(state.episode - 1);
+else { const prevSeason = seasons.find(s => s.season_number === state.season - 1); if (prevSeason) { state.season = state.season - 1; playEpisode(prevSeason.episode_count); } }
+});
+c.querySelector('#epNextChip')?.addEventListener('click', () => { if (hasNext) playEpisode(state.episode + 1); });
 }
 // ============ THEATER PLAYER ============
 // Centered cinema-mode overlay that owns the player section (moved out of the
@@ -1820,6 +1937,21 @@ document.getElementById('theaterCloseBtn').addEventListener('click', closeTheate
 document.getElementById('theaterDetailsBtn').addEventListener('click', closeTheater);
 overlay.querySelector('.theater-backdrop')?.addEventListener('click', closeTheater);
 document.getElementById('theaterFsBtn').addEventListener('click', toggleTheaterFullscreen);
+initTheaterIdle(overlay); // B3: auto-hiding chrome
+}
+// B3: after 3s of no input the theater chrome fades out; any pointer/key
+// activity brings it back. Skipped entirely for reduced-motion users.
+function initTheaterIdle(overlay) {
+let timer = null;
+const wake = () => {
+overlay.classList.remove('chrome-idle');
+clearTimeout(timer);
+timer = setTimeout(() => {
+if (overlay.classList.contains('active') && !overlay.classList.contains('fs-active')) overlay.classList.add('chrome-idle');
+}, 3000);
+};
+['pointermove', 'pointerdown', 'keydown'].forEach(ev => overlay.addEventListener(ev, wake, { passive: true }));
+if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) wake();
 }
 function openTheater() {
 const overlay = document.getElementById('theaterOverlay');
@@ -1828,6 +1960,17 @@ document.getElementById('theaterTitle').textContent = d.title || d.name || 'Now 
 const year = (d.release_date || d.first_air_date || '').split('-')[0];
 document.getElementById('theaterMeta').textContent =
 [year, state.mediaType === 'movie' ? 'Movie' : `TV · S${state.season}E${state.episode}`].filter(Boolean).join(' · ');
+// B4: reset the live progress badge for the new session.
+const prog = document.getElementById('theaterProgress');
+if (prog) { prog.hidden = true; prog.textContent = ''; }
+// B3: ambient light — the title's own backdrop becomes the blurred, dimmed
+// glow behind the stage.
+const tb = document.getElementById('theaterBackdrop');
+if (tb) {
+const amb = d.backdrop_path ? `${IMG_LG}${d.backdrop_path}` : (d.poster_path ? `${IMG_LG}${d.poster_path}` : '');
+if (amb) { tb.style.backgroundImage = `url('${amb}')`; tb.classList.add('has-image'); }
+else { tb.style.backgroundImage = ''; tb.classList.remove('has-image'); }
+}
 const idle = document.getElementById('theaterIdle');
 if (idle) idle.style.display = 'none';
 overlay.classList.add('active');
@@ -1988,18 +2131,32 @@ const id = mp.dataset.mediaId || state.mediaId;
 if (id) openMedia(id, mp.dataset.mediaType || state.mediaType);
 });
 const header = mp.querySelector('.mini-player-header');
-let isDrag = false, offsetX, offsetY;
-// U-06: pointer events replace mouse-only drag (touch devices can now move the
-// panel) and the position is clamped to the viewport so it can't be thrown
-// half off-screen.
+// B5: header gestures — horizontal-dominant drags MOVE the panel (U-06),
+// vertical-dominant downward drags DISMISS it with a fade, like iOS sheets.
+let isDrag = false, offsetX, offsetY, gesture = null, startX = 0, startY = 0, curDy = 0;
 const clampPos = (x, y) => ({
 left: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - mp.offsetWidth)),
 top: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - mp.offsetHeight))
 });
-header.addEventListener('pointerdown', e => { isDrag = true; offsetX = e.clientX - mp.getBoundingClientRect().left; offsetY = e.clientY - mp.getBoundingClientRect().top; mp.style.transition = 'none'; });
-document.addEventListener('pointermove', e => { if (!isDrag) return; const p = clampPos(e.clientX - offsetX, e.clientY - offsetY); mp.style.left = p.left + 'px'; mp.style.top = p.top + 'px'; mp.style.right = 'auto'; mp.style.bottom = 'auto'; });
-document.addEventListener('pointerup', () => { isDrag = false; mp.style.transition = ''; });
-document.addEventListener('pointercancel', () => { isDrag = false; mp.style.transition = ''; });
+header.addEventListener('pointerdown', e => { isDrag = true; gesture = null; startX = e.clientX; startY = e.clientY; curDy = 0; offsetX = e.clientX - mp.getBoundingClientRect().left; offsetY = e.clientY - mp.getBoundingClientRect().top; mp.style.transition = 'none'; });
+document.addEventListener('pointermove', e => {
+if (!isDrag) return;
+if (!gesture) { const dx = e.clientX - startX, dy = e.clientY - startY; if (Math.abs(dx) > 8 || Math.abs(dy) > 8) gesture = Math.abs(dx) > Math.abs(dy) ? 'move' : 'dismiss'; }
+if (gesture === 'move') { const p = clampPos(e.clientX - offsetX, e.clientY - offsetY); mp.style.left = p.left + 'px'; mp.style.top = p.top + 'px'; mp.style.right = 'auto'; mp.style.bottom = 'auto'; }
+else if (gesture === 'dismiss') { curDy = Math.max(0, e.clientY - startY); mp.style.transform = `translateY(${curDy}px)`; mp.style.opacity = String(Math.max(0.25, 1 - curDy / 320)); }
+});
+const endGesture = () => {
+if (!isDrag) return;
+isDrag = false;
+mp.style.transition = '';
+if (gesture === 'dismiss') {
+mp.style.transform = ''; mp.style.opacity = '';
+if (curDy > 90) closeMiniPlayer();
+}
+gesture = null;
+};
+document.addEventListener('pointerup', endGesture);
+document.addEventListener('pointercancel', endGesture);
 }
 function toggleMiniPlayer() {
 const mp = document.getElementById('miniPlayer');
@@ -2064,6 +2221,15 @@ const mediaOpen = document.getElementById('detailModal').classList.contains('act
 if (e.code === 'KeyM') { if (mediaOpen && state.mediaId) toggleMiniPlayer(); }
 if (e.code === 'KeyW') { if (mediaOpen && state.currentDetails) { const d = state.currentDetails; toggleWatchlist(d.id, state.mediaType, d.title || d.name, d.poster_path || ''); } }
 if (e.code === 'KeyT') { if (mediaOpen && state.currentTrailerKey) openTrailer(); }
+// B4: F toggles theater fullscreen while the player is up; N jumps to the
+// next episode of the playing show (wrapper-level, honest controls).
+const theaterActive = document.getElementById('theaterOverlay')?.classList.contains('active');
+if (e.code === 'KeyF' && theaterActive) { e.preventDefault(); toggleTheaterFullscreen(); }
+if (e.code === 'KeyN' && (theaterActive || mediaOpen) && state.mediaType === 'tv') {
+const d = state.currentDetails;
+const cur = (d?.seasons || []).filter(s => s.season_number > 0).find(s => s.season_number === state.season);
+if (cur && state.episode < cur.episode_count) playEpisode(state.episode + 1);
+}
 if (e.code === 'KeyD') toggleTheme();
 if (e.code === 'KeyA') toggleAIChat();
 // V-04: 'Surprise me' now needs Shift+S — a bare 's' opened a random title's
@@ -2458,6 +2624,12 @@ const s = state.currentDetails
 if (!s || !s.id || s.id === 'null') return;
 const progress = data.currentTime && data.duration ? Math.round((data.currentTime / data.duration) * 100) : 0;
 state._lastProgress = progress;
+// B4: live "how far in" badge while the theater is on screen.
+const progBadge = document.getElementById('theaterProgress');
+if (progBadge && progress > 0 && document.getElementById('theaterOverlay')?.classList.contains('active')) {
+progBadge.hidden = false;
+progBadge.textContent = `${progress}% watched`;
+}
 // L-03: the handler used to write storage AND rebuild the continue-watching
 // row ~4x/second during playback. Writes are throttled to one per 15s, with a
 // final flush when the theater or mini player closes.

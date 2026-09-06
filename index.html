@@ -556,12 +556,13 @@
 
     <!-- Theater Player — centered cinema-mode overlay (owns the player section) -->
     <div class="theater-overlay" id="theaterOverlay" role="dialog" aria-modal="true" aria-label="Video player">
-        <div class="theater-backdrop" data-theater-close aria-hidden="true"></div>
+        <div class="theater-backdrop" id="theaterBackdrop" data-theater-close aria-hidden="true"></div>
         <div class="theater-stage-wrap">
             <header class="theater-header">
                 <div class="theater-heading">
                     <h3 class="theater-title" id="theaterTitle">Now Playing</h3>
                     <span class="theater-badge" id="theaterMeta"></span>
+                    <span class="theater-badge theater-progress-badge" id="theaterProgress" hidden></span>
                 </div>
                 <div class="theater-header-actions">
                     <button class="theater-btn" id="theaterDetailsBtn" title="Back to details">ℹ DETAILS</button>
@@ -603,6 +604,10 @@
                     </div>
                 </div>
             </div>
+            <!-- B4: wrapper-level quick navigation (the iframe is cross-origin —
+                 no direct seek/speed control is possible, so these chips only
+                 navigate episodes/servers we control ourselves). -->
+            <div class="episode-chips" id="episodeChips" role="group" aria-label="Quick episode navigation" hidden></div>
             <footer class="theater-controls">
                 <span class="theater-hint" aria-hidden="true">ESC to exit</span>
                 <div class="theater-controls-actions">
@@ -695,6 +700,12 @@
             <div class="shortcut-row"><span class="shortcut-desc">Play trailer (title open)</span>
                 <div class="shortcut-keys"><span class="shortcut-key">T</span></div>
             </div>
+            <div class="shortcut-row"><span class="shortcut-desc">Theater fullscreen (playing)</span>
+                <div class="shortcut-keys"><span class="shortcut-key">F</span></div>
+            </div>
+            <div class="shortcut-row"><span class="shortcut-desc">Next episode (playing)</span>
+                <div class="shortcut-keys"><span class="shortcut-key">N</span></div>
+            </div>
             <div class="shortcut-row"><span class="shortcut-desc">Toggle theme</span>
                 <div class="shortcut-keys"><span class="shortcut-key">D</span></div>
             </div>
@@ -768,6 +779,31 @@
             <button class="btn btn-outline btn-sm" id="closeShareWatchlistBtn">CLOSE</button>
         </div>
     </div>
+
+    <!-- B1: persistent bottom tab bar (mobile ≤767px) — thumb-reach primary
+         navigation; hides on scroll down, returns on scroll up. -->
+    <nav class="bottom-tab-bar" id="bottomTabBar" aria-label="Quick navigation">
+        <button type="button" class="tab-btn active" data-tab="home" aria-label="Home" aria-current="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg>
+            <span>Home</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="search" aria-label="Search" aria-current="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
+            <span>Search</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="discover" aria-label="Discover genres" aria-current="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>
+            <span>Discover</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="watchlist" aria-label="My watchlist" aria-current="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            <span>Watchlist</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="profile" aria-label="Switch profile" aria-current="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+            <span>Profile</span>
+        </button>
+    </nav>
 
     <script src="app.js"></script>
     <script src="a11y.js"></script>

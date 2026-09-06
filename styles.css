@@ -15,7 +15,7 @@ Responsive: Mobile-First (320px to 1920px+)
 --font-display:'Bebas Neue',sans-serif;--font-body:'DM Sans',sans-serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code','Segoe UI Mono','Roboto Mono',Consolas,Menlo,monospace;
 --radius:8px;--radius-full:50px;--transition:0.3s cubic-bezier(0.4, 0, 0.2, 1);
 --space-xs:0.5rem;--space-sm:1rem;--space-md:2rem;--space-lg:4rem;--space-xl:8rem;
---fs-xs:clamp(0.7rem,0.6rem+0.5vw,0.8rem);--fs-sm:clamp(0.8rem,0.7rem+0.5vw,0.9rem);--fs-base:clamp(0.9rem,0.8rem+0.5vw,1rem);--fs-md:clamp(1.1rem,1rem+0.5vw,1.3rem);--fs-lg:clamp(1.5rem,1.2rem+1vw,2.2rem);--fs-xl:clamp(2rem,1.5rem+2vw,4rem);--fs-display:clamp(2.5rem,2rem+4vw,6rem);
+--fs-xs:clamp(0.7rem, 0.6rem + 0.5vw, 0.8rem);--fs-sm:clamp(0.8rem, 0.7rem + 0.5vw, 0.9rem);--fs-base:clamp(0.9rem, 0.8rem + 0.5vw, 1rem);--fs-md:clamp(1.1rem, 1rem + 0.5vw, 1.3rem);--fs-lg:clamp(1.5rem, 1.2rem + 1vw, 2.2rem);--fs-xl:clamp(2rem, 1.5rem + 2vw, 4rem);--fs-display:clamp(2.5rem, 2rem + 4vw, 6rem);
 --z-nav:1000;--z-lang:1100;--z-dropdown:100;--z-floating:1200;--z-chat:1400;--z-player:1500;--z-modal:2000;--z-trailer:3000;--z-shortcuts:4000;--z-toast:5000;--z-profile:6000;--z-tooltip:6000;--z-profile-manager:6500;--z-critical:7000;--z-sharecard:7500;--z-resume:7600;--z-import:7700;--z-pin:7800;--z-palette:8000;--z-ptr:8500;--z-top-progress:9000;--z-top:9999;
 --banner-interval:6s;--intersection-root-margin:200px;--trailer-preview-delay:900;--mobile-h:48px;--mobile-h-sm:36px;--card-width-sm:130px;--card-width-md:150px;--card-width-lg:170px;--card-width-xl:190px;--card-width-2xl:210px;--poster-height-sm:195px;--poster-height-md:225px;--poster-height-lg:255px;--poster-height-xl:285px;--poster-height-2xl:315px;--top10-number-size:6rem;--img-sm:w185;--img-md:w342;--img-lg:w1280;--img-face:w185;
 --nav-height:60px;
@@ -1014,3 +1014,98 @@ backdrop-filter:blur(20px)
   transition: all var(--transition); flex-shrink: 0; min-height: 32px; min-width: 44px;
 }
 .toast-action:hover, .toast-action:focus-visible { border-color: var(--accent); background: rgba(227, 0, 27, 0.12); outline: none; }
+
+/* =====================================================================
+   PHASE 1 — WORKSTREAM B: mobile-first playback & navigation
+   ===================================================================== */
+
+/* ===== B1: bottom tab bar (≤767px) =====
+   Sits BELOW the mobile bottom-sheet menu (z-nav) and every overlay, so
+   modals/theater/menu always cover it. Hidden state slides it off-screen. */
+.bottom-tab-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 990;
+  display: none;
+  background: rgba(10, 10, 10, 0.92);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid var(--border-card);
+  padding: 0.25rem 0.25rem calc(0.25rem + env(safe-area-inset-bottom, 0px));
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-theme="light"] .bottom-tab-bar { background: rgba(255, 255, 255, 0.94); }
+.bottom-tab-bar.hidden { transform: translateY(110%); }
+.bottom-tab-bar .tab-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-height: 48px; padding: 7px 0 5px; background: none; border: none;
+  color: var(--text-muted); font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: 0.04em; cursor: pointer; border-radius: 10px;
+  transition: color 0.2s ease;
+}
+.bottom-tab-bar .tab-btn svg { width: 22px; height: 22px; }
+.bottom-tab-bar .tab-btn.active, .bottom-tab-bar .tab-btn:hover { color: var(--accent); }
+@media (max-width: 767px) {
+  .bottom-tab-bar { display: flex; }
+  /* keep footer links and toasts clear of the bar */
+  .footer { padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); }
+  .toast-container { bottom: calc(4.8rem + env(safe-area-inset-bottom, 0px)); }
+  /* the install banner must never cover the tab bar */
+  .pwa-banner { bottom: calc(4.8rem + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ===== B2/B6: bottom-sheet drag handle on the modal hero (≤640px) ===== */
+@media (max-width: 640px) {
+  .modal-hero::before {
+    content: ''; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+    width: 44px; height: 4px; border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28); z-index: 11; pointer-events: none;
+  }
+  .modal-wrap { transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1); }
+}
+
+/* ===== B3: ambient light behind the theater stage ===== */
+.theater-backdrop { overflow: hidden; }
+.theater-backdrop::after { content: ''; position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); }
+.theater-backdrop.has-image {
+  background-size: cover; background-position: center;
+  filter: blur(38px) brightness(0.35) saturate(1.25);
+  transform: scale(1.3); /* hide blur edge vignetting */
+}
+
+/* ===== B3: auto-hiding theater chrome after 3s idle ===== */
+.theater-header, .theater-controls, .theater-stage .quality-selector { transition: opacity 0.4s ease; }
+.theater-overlay.chrome-idle .theater-header,
+.theater-overlay.chrome-idle .theater-controls,
+.theater-overlay.chrome-idle .theater-stage .quality-selector { opacity: 0; pointer-events: none; }
+.theater-overlay.chrome-idle .theater-stage { cursor: none; }
+
+/* ===== B4: live progress badge + quick episode chips ===== */
+.theater-progress-badge { color: var(--accent-gold); border-color: rgba(255, 215, 0, 0.35); }
+.episode-chips { display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap; }
+.episode-chips[hidden] { display: none; }
+.ep-chip {
+  font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.05em;
+  color: var(--text-secondary); background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-card); border-radius: 999px;
+  padding: 0.45rem 0.95rem; cursor: pointer; transition: all var(--transition);
+  min-height: 36px;
+}
+.ep-chip:hover:not(:disabled), .ep-chip:focus-visible:not(:disabled) { color: #fff; border-color: var(--accent); background: rgba(227, 0, 27, 0.15); outline: none; }
+.ep-chip:disabled { opacity: 0.35; cursor: default; }
+.ep-chip-label { color: var(--accent-gold); border-style: dashed; cursor: default; }
+
+/* ===== B7: immersive landscape phones — player full-bleed, chrome overlays
+   on top of the picture with gradient scrims (auto-hides via .chrome-idle) */
+@media (orientation: landscape) and (max-height: 520px) {
+  .theater-overlay { padding: 0; }
+  .theater-stage-wrap {
+    position: relative; width: 100vw; height: 100dvh; max-height: 100dvh;
+    gap: 0; padding: 0; justify-content: center;
+  }
+  .theater-stage { border-radius: 0; border: none; aspect-ratio: auto; height: 100dvh; }
+  .theater-header, .theater-controls {
+    position: absolute; left: 0; right: 0; z-index: 6;
+    padding: 0.5rem 0.9rem; margin: 0;
+  }
+  .theater-header { top: 0; background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent); }
+  .theater-controls { bottom: 0; background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent); }
+  .episode-chips { position: absolute; bottom: 3.2rem; left: 0; right: 0; z-index: 5; }
+}
