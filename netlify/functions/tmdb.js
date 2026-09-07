@@ -14,7 +14,9 @@
 // rate limiting in front of this function.
 'use strict';
 
-const ALLOWED_PATH = /^\/(trending|movie|tv|search|discover|genre|person|watch\/providers|configuration)(\/|$)/;
+// B3 (Phase 2): `collection` joins the allowlist for read-only franchise hubs
+// (/collection/{id} returns parts + metadata only — still fully public data).
+const ALLOWED_PATH = /^\/(trending|movie|tv|search|discover|genre|person|collection|watch\/providers|configuration)(\/|$)/;
 const MAX_PATH_LEN = 300;
 const RATE_LIMIT = 60;              // requests per window per IP
 const RATE_WINDOW_MS = 60 * 1000;

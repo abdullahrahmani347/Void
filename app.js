@@ -35,7 +35,7 @@ const MediaCache = new Map();
 function cacheMedia(id, type, title, poster, extra = {}){
 const key = type + ':' + id;
 const prev = MediaCache.get(key) || {};
-MediaCache.set(key, { id, type, title: title || prev.title || '', poster: poster || prev.poster || '', year: extra.year || prev.year || '', rating: extra.rating || prev.rating || 0 });
+MediaCache.set(key, { id, type, title: title || prev.title || '', poster: poster || prev.poster || '', year: extra.year || prev.year || '', rating: extra.rating || prev.rating || 0, genre_ids: extra.genre_ids || prev.genre_ids || [] }); // B6: genre_ids feed trending-in-your-genres
 }
 function getCached(id, type){ return MediaCache.get(type + ':' + id) || { id, type, title: '', poster: '', year: '', rating: 0 }; }
 // L-15: highlight runs over the RAW string and escapes each half around the
@@ -570,7 +570,8 @@ const filter = state.searchFilter;
 let results;
 if (filter === 'multi') {
 const d = await tmdb(`/search/multi?query=${encodeURIComponent(query)}&include_adult=false`);
-results = (d.results || []).filter(i => i.media_type === 'movie' || i.media_type === 'tv');
+// B3: franchise collections in search results — they open a hub, not a modal
+results = (d.results || []).filter(i => i.media_type === 'movie' || i.media_type === 'tv' || i.media_type === 'collection');
 } else {
 const d = await tmdb(`/search/${filter}?query=${encodeURIComponent(query)}&include_adult=false`);
 results = (d.results || []).map(i => ({ ...i, media_type: filter }));
@@ -588,6 +589,17 @@ const q = input.value.trim();
 if (!results.length) { container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><div style="font-size:1.5rem;margin-bottom:0.5rem">🔍</div>No results for "' + esc(q) + '" — try a different search or use AI search</div>'; container.classList.add('active'); input.setAttribute('aria-expanded', 'true'); return; }
 const note = filterNote ? `<div class="active-filter-note" role="note">${esc(filterNote)}</div>` : '';
 container.innerHTML = note + results.map(item => {
+// B3: franchise collections get their own row type in the dropdown
+if (item.media_type === 'collection') {
+const name = item.title || item.name || '';
+return `<button type="button" class="search-result-item collection-item" role="option" tabindex="-1" aria-selected="false" data-collection-id="${item.id}" data-collection-name="${esc(name)}">
+  <img src="${item.poster_path ? IMG_SM + esc(item.poster_path) : ''}" alt="" class="search-result-poster" loading="lazy" data-img-fallback data-fallback-hide="true">
+  <div class="search-result-info">
+    <div class="search-result-title">${esc(name)}</div>
+    <div class="search-result-meta"><span class="type-badge collection">FRANCHISE</span></div>
+  </div>
+</button>`;
+}
 const id = item.id;
 const type = item.media_type || 'movie';
 const title = item.title || item.name || '';
@@ -609,6 +621,10 @@ container.classList.add('active'); input.setAttribute('aria-expanded', 'true');
 announce(`Found ${results.length} results for ${q}`);
 container.querySelectorAll('.search-result-item').forEach(el => {
 el.addEventListener('click', () => { openMedia(parseInt(el.dataset.id), el.dataset.type); container.classList.remove('active'); input.value=''; input.setAttribute('aria-expanded','false'); });
+});
+// B3: franchise rows open the collection hub instead of a title modal
+container.querySelectorAll('.collection-item').forEach(el => {
+el.addEventListener('click', () => { openFranchise(el.dataset.collectionId, el.dataset.collectionName); container.classList.remove('active'); input.value=''; input.setAttribute('aria-expanded','false'); });
 });
 }
 
@@ -729,7 +745,7 @@ const id = item.id;
 const type = item.media_type || 'movie';
 const title = item.title || item.name || '';
 const year = (item.release_date || item.first_air_date || '').split('-')[0];
-cacheMedia(id, type, title, item.poster_path || '', { year, rating: item.vote_average || 0 });
+cacheMedia(id, type, title, item.poster_path || '', { year, rating: item.vote_average || 0, genre_ids: item.genre_ids || [] });
 const t = esc(title);
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
 const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
@@ -1052,18 +1068,44 @@ if (unique.length) { document.getElementById('aiRecommendationsSection').style.d
 } catch (e) { loadRecommendations(); }
 }
 async function loadRecommendations() {
+// B2: computed from the 3 most recent recently_viewed seeds; each seed pulls
+// BOTH /recommendations AND /similar; results are interleaved so the row
+// mixes influences, and deduped against watchlist/diary/continue-watching/
+// viewing history AND already-shown titles.
 const watched = Store.get('recently_viewed');
-const seed = watched.slice(0, 3);
-if (!seed.length) return;
+const seeds = watched.slice(0, 3);
+if (!seeds.length) return;
+const excluded = new Set();
+watched.forEach(w => excluded.add(`${w.type}:${w.id}`));
+Store.get('watchlist').forEach(w => excluded.add(`${w.type}:${w.id}`));
+Store.get('continue_watching').forEach(w => excluded.add(`${w.type}:${w.id}`));
+Store.get('watch_diary', []).forEach(d => excluded.add(`${d.type}:${d.id}`));
 try {
-const results = await Promise.all(seed.map(s => tmdbList(`/${s.type}/${s.id}/recommendations`)));
-// L-02: per-seed type tagging — seeds can mix movies and TV, and stamping
-// every result with seed[0].type opened TV titles in the movie player.
+const batches = await Promise.all(seeds.map(async s => {
+const [recs, sim] = await Promise.all([
+tmdbList(`/${s.type}/${s.id}/recommendations`).catch(() => []),
+tmdbList(`/${s.type}/${s.id}/similar`).catch(() => [])
+]);
+return [...recs, ...sim].map(item => ({ item, type: s.type }));
+}));
+const maxLen = Math.max(0, ...batches.map(b => b.length));
 const flat = [];
-results.forEach((batch, i) => { batch.forEach(item => flat.push({ item, type: seed[i].type })); });
-const unique = []; const seen = new Set();
-for (const { item, type } of flat) { const k = `${type}:${item.id}`; if (!seen.has(k)) { seen.add(k); unique.push({ ...item, media_type: type }); } }
-if (unique.length) { document.getElementById('recommendationsSection').style.display = 'block'; renderContentRow('recommendations', unique.slice(0, 20)); }
+for (let i = 0; i < maxLen; i++) batches.forEach(b => { if (b[i]) flat.push(b[i]); });
+const unique = [];
+const shown = new Set();
+for (const { item, type } of flat) {
+const k = `${type}:${item.id}`;
+if (excluded.has(k) || shown.has(k) || !item.poster_path) continue;
+shown.add(k);
+unique.push({ ...item, media_type: type });
+if (unique.length >= 20) break;
+}
+if (unique.length) {
+const seedTitle = String(seeds[0].title || '').slice(0, 32);
+document.querySelector('#recommendationsSection .section-title').textContent = seedTitle ? `BECAUSE YOU WATCHED ${seedTitle.toUpperCase()}` : 'BECAUSE YOU WATCHED';
+document.getElementById('recommendationsSection').style.display = 'block';
+renderContentRow('recommendations', unique.slice(0, 20));
+}
 } catch (e) { console.error('Recommendations error', e); }
 }
 
@@ -1087,7 +1129,10 @@ load('topRated', '/movie/top_rated', 'movie'),
 load('nowPlaying', nowPlayingPromise, 'movie'),
 load('hiddenGems', '/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc', 'movie'),
 ]);
-renderTop10(await tmdbList('/trending/all/week').catch(() => []));
+// B6: one trending payload feeds BOTH the Top 10 row and trending-in-your-genres
+const trendingAll = await tmdbList('/trending/all/week').catch(() => []);
+renderTop10(trendingAll);
+renderTrendingInYourGenres(trendingAll);
 loadNewThisWeek(await nowPlayingPromise.catch(() => null));
 announce('Home feed loaded');
 }
@@ -1552,7 +1597,462 @@ return String(s || '')
 .trim();
 }
 
-// ============ EVENT DELEGATION ============
+// ============ B1: MOOD SHUFFLE FAB ============
+// Picks a random mood matrix, fetches a random results page from it, and
+// opens a random title from that page. Pure TMDB — no AI involved.
+async function moodShufflePick() {
+const m = MOOD_ROWS[Math.floor(Math.random() * MOOD_ROWS.length)];
+const fab = document.getElementById('moodFab');
+try {
+if (fab) fab.classList.add('spinning');
+const page = 1 + Math.floor(Math.random() * 5);
+const items = await tmdbList(`/discover/movie?${moodRowParams(m, page)}`);
+const pool = items.filter(i => i.poster_path);
+if (!pool.length) { toast('No picks found for that mood — try again', 'info'); return; }
+const pick = pool[Math.floor(Math.random() * pool.length)];
+toast(`Mood: ${m.aria}`, 'info');
+openMedia(pick.id, 'movie');
+} catch (e) {
+toast('Mood shuffle unavailable right now', 'warning');
+} finally { if (fab) fab.classList.remove('spinning'); }
+}
+function initMoodFab() {
+const fab = document.getElementById('moodFab');
+if (fab) fab.addEventListener('click', moodShufflePick);
+}
+
+// ============ B3: FRANCHISE HUBS ============
+// /collection/{id} → ordered parts, total runtime, "in your watchlist"
+// badges. Opened from search results (collections in search/multi) and from
+// the "belongs_to_collection" chip in the movie modal.
+async function openFranchise(collectionId, fallbackName) {
+const idNum = parseInt(collectionId, 10);
+if (!Number.isFinite(idNum)) return;
+const overlay = document.getElementById('franchiseModal');
+const bodyEl = document.getElementById('franchiseBody');
+if (!overlay || !bodyEl) return;
+document.getElementById('franchiseTitle').textContent = fallbackName || 'Collection';
+document.getElementById('franchiseSub').textContent = 'Loading collection…';
+bodyEl.innerHTML = Array(4).fill('<div class="skeleton" style="height:112px;width:100%;margin-bottom:0.75rem;border-radius:var(--radius)"></div>').join('');
+openOverlay(overlay, '#franchiseClose');
+try {
+const col = await tmdb(`/collection/${idNum}`);
+const parts = (col.parts || []).filter(p => p && p.id).slice(0, 15);
+if (!overlay.classList.contains('active')) return; // closed while loading
+document.getElementById('franchiseTitle').textContent = col.name || fallbackName || 'Collection';
+if (!parts.length) {
+document.getElementById('franchiseSub').textContent = '';
+bodyEl.innerHTML = '<p style="color:var(--text-muted);padding:1rem">No films in this collection.</p>';
+return;
+}
+const details = await Promise.all(parts.map(p => tmdb(`/movie/${p.id}`).catch(() => null)));
+if (!overlay.classList.contains('active')) return;
+const resolved = parts.map((p, i) => details[i] || p);
+const totalMin = resolved.reduce((s, d) => s + (d.runtime || 0), 0);
+const sub = `${parts.length} film${parts.length !== 1 ? 's' : ''} · ${Math.floor(totalMin / 60)}h ${totalMin % 60}m total`;
+document.getElementById('franchiseSub').textContent = col.overview ? sub + ' — ' + col.overview.slice(0, 180) : sub;
+const watchlist = Store.get('watchlist');
+bodyEl.innerHTML = resolved.map((d, i) => {
+const title = d.title || '';
+const wl = watchlist.some(w => String(w.id) === String(d.id) && w.type === 'movie');
+const runtime = d.runtime ? `${d.runtime} min` : '';
+const year = (d.release_date || '').slice(0, 4);
+return `<button type="button" class="franchise-part" data-action="open-media" data-id="${d.id}" data-type="movie" aria-label="${esc(title)}, ${year}${runtime ? ', ' + runtime : ''}${wl ? ', in your watchlist' : ''}">
+<img class="franchise-poster" src="${d.poster_path ? IMG_SM + esc(d.poster_path) : ''}" alt="" loading="lazy" data-img-fallback data-fallback-bg="#222">
+<div class="franchise-info">
+<span class="franchise-order" aria-hidden="true">${i + 1}</span>
+<div class="franchise-name">${esc(title)}${wl ? ' <span class="franchise-wl">♥ IN YOUR WATCHLIST</span>' : ''}</div>
+<div class="franchise-meta">${[year, runtime, d.vote_average ? d.vote_average.toFixed(1) + ' ★' : ''].filter(Boolean).join(' · ')}</div>
+${d.overview ? `<div class="franchise-overview">${esc(d.overview.slice(0, 150))}…</div>` : ''}
+</div></button>`;
+}).join('');
+observeImages(bodyEl);
+} catch (e) {
+bodyEl.innerHTML = `<div class="section-error" role="alert"><span>Couldn't load this collection.</span><button type="button" class="btn btn-outline btn-sm" data-action="retry-franchise" data-id="${idNum}" data-name="${esc(fallbackName || '')}">RETRY</button></div>`;
+}
+}
+function renderFranchiseChip(d) {
+const slot = document.getElementById('franchiseChipSlot');
+if (!slot) return;
+const col = d && d.belongs_to_collection;
+slot.innerHTML = col && col.id
+? `<button type="button" class="franchise-chip" data-action="open-franchise" data-id="${col.id}" data-name="${esc(col.name || '')}" aria-label="Open franchise hub: ${esc(col.name || '')}">▸ FRANCHISE: ${esc(col.name || '')}</button>`
+: '';
+}
+
+// ============ B5: GENRE DEEP-DIVE (sticky filters + URL state) ============
+// ?section=genre&id=18&year=1990-2010&rating=7&runtime=120&provider=8&cert=PG
+// Back/forward work via popstate; the URL is shareable and re-hydratable.
+const DD_STATE = { genreId: null, page: 1, totalPages: 1, push: true };
+const DD_PROVIDERS = new Set(['8', '9', '33', '15', '189', '350']);
+const DD_CERTS = new Set(['G', 'PG', 'PG-13', 'R']);
+function ddPopulateYears() {
+const cur = new Date().getFullYear();
+['ddYearFrom', 'ddYearTo'].forEach(id => {
+const sel = document.getElementById(id);
+if (!sel || sel.options.length > 1) return;
+for (let y = cur; y >= 1950; y--) sel.innerHTML += `<option value="${y}">${y}</option>`;
+});
+}
+function ddFiltersFromControls() {
+const yearFrom = document.getElementById('ddYearFrom').value;
+const yearTo = document.getElementById('ddYearTo').value;
+const rating = document.getElementById('ddRating').value;
+const runtime = document.getElementById('ddRuntime').value;
+const provider = document.getElementById('ddProvider').value;
+const cert = document.getElementById('ddCert').value;
+return { yearFrom, yearTo, rating, runtime, provider, cert };
+}
+function ddUrlFromFilters(f) {
+const p = new URLSearchParams();
+p.set('section', 'genre');
+if (DD_STATE.genreId) p.set('id', String(DD_STATE.genreId));
+if (f.yearFrom && f.yearTo) p.set('year', `${f.yearFrom}-${f.yearTo}`);
+else if (f.yearFrom) p.set('year', `${f.yearFrom}-`);
+else if (f.yearTo) p.set('year', `-${f.yearTo}`);
+if (f.rating) p.set('rating', f.rating);
+if (f.runtime) p.set('runtime', f.runtime);
+if (f.provider) p.set('provider', f.provider);
+if (f.cert) p.set('cert', f.cert);
+return `?${p.toString()}`;
+}
+function ddControlsFromUrl(params) {
+const year = params.get('year') || '';
+const [yf, yt] = year.split('-');
+document.getElementById('ddYearFrom').value = /^\d{4}$/.test(yf || '') ? yf : '';
+document.getElementById('ddYearTo').value = /^\d{4}$/.test(yt || '') ? yt : '';
+document.getElementById('ddRating').value = ['7', '8', '9'].includes(params.get('rating')) ? params.get('rating') : '';
+document.getElementById('ddRuntime').value = ['90', '120', '150', '180'].includes(params.get('runtime')) ? params.get('runtime') : '';
+document.getElementById('ddProvider').value = DD_PROVIDERS.has(params.get('provider')) ? params.get('provider') : '';
+document.getElementById('ddCert').value = DD_CERTS.has(params.get('cert')) ? params.get('cert') : '';
+}
+function ddQuery(filters, page) {
+const p = new URLSearchParams();
+p.set('with_genres', String(DD_STATE.genreId));
+p.set('sort_by', 'popularity.desc');
+p.set('vote_count.gte', '50');
+if (filters.yearFrom) p.set('primary_release_date.gte', `${filters.yearFrom}-01-01`);
+if (filters.yearTo) p.set('primary_release_date.lte', `${filters.yearTo}-12-31`);
+if (filters.rating) p.set('vote_average.gte', filters.rating);
+if (filters.runtime) p.set('with_runtime.lte', filters.runtime);
+if (filters.provider) { p.set('with_watch_providers', filters.provider); p.set('watch_region', 'US'); }
+if (filters.cert) { p.set('certification_country', 'US'); p.set('certification.lte', filters.cert); }
+if (page > 1) p.set('page', String(page));
+return p.toString();
+}
+function openGenreDeepDive(id, name, push = true) {
+id = parseInt(id, 10);
+if (!Number.isFinite(id)) return;
+DD_STATE.genreId = id;
+DD_STATE.page = 1;
+const known = ALL_GENRES.find(g => g.id === id);
+const label = name || (known ? known.name : 'Genre');
+document.getElementById('genreDeepDiveSection').hidden = false;
+document.getElementById('deepDiveTitle').textContent = label.toUpperCase();
+document.getElementById('genreResultsSection').style.display = 'none'; // old quick row yields to the hub
+ddPopulateYears();
+ddControlsFromUrl(new URLSearchParams()); // reset controls on a fresh chip click
+if (push) { try { history.pushState({ ddGenre: id }, '', ddUrlFromFilters(ddFiltersFromControls())); } catch (e) {} }
+renderDeepDive();
+document.getElementById('genreDeepDiveSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function renderDeepDive(append = false) {
+if (!DD_STATE.genreId) return;
+const grid = document.getElementById('deepDiveGrid');
+const moreBtn = document.getElementById('ddMore');
+const filters = ddFiltersFromControls();
+if (!append) grid.setAttribute('aria-busy', 'true');
+try {
+const page = append ? DD_STATE.page + 1 : 1;
+const items = await tmdbList(`/discover/movie?${ddQuery(filters, page)}`);
+DD_STATE.page = page;
+DD_STATE.totalPages = 20; // TMDB caps unauthenticated discover pages; MORE hides on empty
+if (!append) grid.innerHTML = '';
+grid.removeAttribute('aria-busy');
+if (!items.length && !append) {
+grid.innerHTML = '<div class="empty-state" role="status">No titles match these filters — try loosening them.</div>';
+moreBtn.hidden = true;
+return;
+}
+const html = items.slice(0, 20).map((item, i) => buildCardHTML({ ...item, media_type: 'movie' }, { d: 0 })).join('');
+if (append) grid.insertAdjacentHTML('beforeend', html); else grid.innerHTML = html;
+observeImages(grid);
+initHoverTrailerPreviews(grid);
+moreBtn.hidden = items.length < 20;
+} catch (e) {
+grid.removeAttribute('aria-busy');
+renderSectionError('deepDiveGrid', () => renderDeepDive(append));
+}
+}
+function initDeepDive() {
+ddPopulateYears();
+const section = document.getElementById('genreDeepDiveSection');
+if (!section) return;
+['ddYearFrom', 'ddYearTo', 'ddRating', 'ddRuntime', 'ddProvider', 'ddCert'].forEach(id => {
+document.getElementById(id).addEventListener('change', () => {
+if (!DD_STATE.genreId) return;
+try { history.pushState({ ddGenre: DD_STATE.genreId }, '', ddUrlFromFilters(ddFiltersFromControls())); } catch (e) {}
+renderDeepDive();
+});
+});
+document.getElementById('ddClear').addEventListener('click', () => {
+ddControlsFromUrl(new URLSearchParams());
+if (DD_STATE.genreId) { try { history.pushState({ ddGenre: DD_STATE.genreId }, '', ddUrlFromFilters(ddFiltersFromControls())); } catch (e) {} }
+renderDeepDive();
+});
+document.getElementById('ddMore').addEventListener('click', () => renderDeepDive(true));
+window.addEventListener('popstate', () => {
+const params = new URLSearchParams(window.location.search);
+if (params.get('section') === 'genre' && params.get('id')) {
+DD_STATE.genreId = parseInt(params.get('id'), 10);
+const known = ALL_GENRES.find(g => g.id === DD_STATE.genreId);
+document.getElementById('genreDeepDiveSection').hidden = false;
+document.getElementById('deepDiveTitle').textContent = (known ? known.name : 'Genre').toUpperCase();
+ddControlsFromUrl(params);
+renderDeepDive();
+} else if (!window.location.hash.startsWith('#/')) {
+section.hidden = true;
+DD_STATE.genreId = null;
+}
+});
+// Direct arrival on a shared genre URL (?section=genre&id=…).
+const params = new URLSearchParams(window.location.search);
+if (params.get('section') === 'genre' && params.get('id')) {
+const id = parseInt(params.get('id'), 10);
+const known = ALL_GENRES.find(g => g.id === id);
+DD_STATE.genreId = id;
+ddControlsFromUrl(params);
+ddPopulateYears();
+document.getElementById('genreDeepDiveSection').hidden = false;
+document.getElementById('deepDiveTitle').textContent = (known ? known.name : 'Genre').toUpperCase();
+renderDeepDive();
+}
+}
+
+// ============ B4: COLLECTIONS BUILDER (drag-reorder, collage, share, similar) ============
+function listCollageHTML(items) {
+const posters = items.filter(i => i.poster_path).slice(0, 4);
+if (!posters.length) return '<div class="list-collage list-collage-empty" aria-hidden="true">🎬</div>';
+return `<div class="list-collage" aria-hidden="true">${posters.map(p => `<img src="${IMG_SM}${esc(p.poster_path)}" alt="" loading="lazy" data-img-fallback data-fallback-hide="true">`).join('')}</div>`;
+}
+// B4: shareable link carries the LIST ITSELF (?cl=<name+items b64>) — the
+// recipient imports it as a new local collection. ?list= stays reserved for
+// watchlist shares (watchlist-share.js).
+function customListShareLink(list) {
+const payload = { n: list.name, i: list.items.slice(0, 15).map(x => ({ i: String(x.id), t: x.media_type })) };
+const bytes = new TextEncoder().encode(JSON.stringify(payload));
+let bin = '';
+bytes.forEach(b => { bin += String.fromCharCode(b); });
+const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+return `${location.origin}${location.pathname}?cl=${b64}`;
+}
+async function importCustomListFromUrl() {
+const raw = new URLSearchParams(location.search).get('cl');
+if (!raw || raw.length < 12) return;
+let payload;
+try {
+const bin = atob(raw.replace(/-/g, '+').replace(/_/g, '/'));
+const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+payload = JSON.parse(new TextDecoder().decode(bytes));
+} catch (e) { return; }
+if (!payload || !payload.n || !Array.isArray(payload.i) || !payload.i.length) return;
+history.replaceState(null, '', location.pathname + location.search.replace(/[?&]cl=[^&]*/, '').replace(/\?$/, ''));
+const fetched = [];
+for (const { i, t } of payload.i.slice(0, 15)) {
+try {
+const d = await tmdb(`/${t === 'tv' ? 'tv' : 'movie'}/${i}`);
+fetched.push({ id: String(i), media_type: t === 'tv' ? 'tv' : 'movie', title: d.title || d.name, poster_path: d.poster_path || '', vote_average: d.vote_average || 0, genre_ids: (d.genres || []).map(g => g.id) });
+} catch (e) {}
+await new Promise(r => setTimeout(r, 120)); // gentle on the proxy cache
+}
+if (!fetched.length) { toast('That shared collection could not be loaded', 'error'); return; }
+const el = document.createElement('div');
+el.className = 'import-overlay active';
+el.innerHTML = `
+<div class="import-panel" role="dialog" aria-modal="true" aria-label="Import shared collection">
+<div class="import-emoji" aria-hidden="true">🗂</div>
+<h3 class="import-title">“${esc(payload.n)}” — ${fetched.length} title${fetched.length > 1 ? 's' : ''}</h3>
+<div class="import-posters">
+${fetched.slice(0, 6).map(i => `<img src="${IMG_SM}${esc(i.poster_path || '')}" alt="${esc(i.title)}" loading="lazy" data-img-fallback data-fallback-hide="true">`).join('')}
+${fetched.length > 6 ? `<span class="import-more">+${fetched.length - 6}</span>` : ''}
+</div>
+<div class="import-actions">
+<button class="btn btn-outline btn-sm" id="clImportDismiss">Dismiss</button>
+<button class="btn btn-primary btn-sm" id="clImportAdd">Save as my collection</button>
+</div>
+</div>`;
+document.body.appendChild(el);
+const panel = el.querySelector('.import-panel');
+trapFocus(panel);
+const close = () => { releaseFocus(panel); el.remove(); };
+el.addEventListener('click', e => { if (e.target === el) close(); });
+panel.querySelector('#clImportDismiss').onclick = close;
+panel.querySelector('#clImportAdd').onclick = () => {
+const lists = Store.get('custom_lists', []);
+lists.push({ id: Date.now(), name: String(payload.n).slice(0, 40), desc: '', items: fetched, createdAt: Date.now() });
+Store.set('custom_lists', lists);
+renderCustomLists();
+close();
+toast(`Collection “${payload.n}” saved`, 'success');
+};
+}
+// B4: "Add similar titles" — recommendations+similar for the list's seeds,
+// deduped against the list itself; one-click add per suggestion.
+async function addSimilarToList(listId, anchorEl) {
+const lists = Store.get('custom_lists', []);
+const list = lists.find(l => l.id === listId);
+if (!list) return;
+if (!list.items.length) { toast('Add a few titles first, then get suggestions', 'info'); return; }
+let panel = document.getElementById(`similarPanel_${listId}`);
+if (panel) { panel.remove(); return; } // toggle
+panel = document.createElement('div');
+panel.className = 'similar-suggest-panel';
+panel.id = `similarPanel_${listId}`;
+panel.setAttribute('role', 'group');
+panel.setAttribute('aria-label', 'Suggested titles to add');
+panel.innerHTML = '<div class="similar-suggest-head">SUGGESTED TITLES</div><div class="similar-suggest-body"><div class="skeleton" style="height:40px;margin-bottom:0.5rem"></div><div class="skeleton" style="height:40px;margin-bottom:0.5rem"></div><div class="skeleton" style="height:40px"></div></div>';
+anchorEl.closest('.custom-list-row').appendChild(panel);
+try {
+const seeds = list.items.slice(0, 3);
+const batches = await Promise.all(seeds.map(s => Promise.all([
+tmdbList(`/${s.media_type === 'tv' ? 'tv' : 'movie'}/${s.id}/recommendations`).catch(() => []),
+tmdbList(`/${s.media_type === 'tv' ? 'tv' : 'movie'}/${s.id}/similar`).catch(() => [])
+]).then(([a, b]) => [...a, ...b])));
+const inList = new Set(list.items.map(x => `${x.media_type}:${x.id}`));
+const seen = new Set();
+const suggestions = [];
+for (const batch of batches) {
+for (const it of batch) {
+const type = it.media_type || (it.title ? 'movie' : 'tv');
+const k = `${type}:${it.id}`;
+if (inList.has(k) || seen.has(k) || !it.poster_path) continue;
+seen.add(k);
+suggestions.push({ ...it, media_type: type });
+if (suggestions.length >= 5) break;
+}
+if (suggestions.length >= 5) break;
+}
+if (!suggestions.length) { panel.querySelector('.similar-suggest-body').innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem">No fresh suggestions right now.</p>'; return; }
+panel.querySelector('.similar-suggest-body').innerHTML = suggestions.map(s => `
+<div class="similar-suggest-item">
+<img src="${IMG_SM}${esc(s.poster_path)}" alt="" loading="lazy" data-img-fallback data-fallback-hide="true">
+<span class="ss-title">${esc(s.title || s.name || '')}</span>
+<button type="button" class="btn btn-outline btn-sm ss-add" data-action="add-similar-item" data-list="${listId}" data-id="${s.id}" data-type="${s.media_type}" data-title="${esc(s.title || s.name || '')}" data-poster="${esc(s.poster_path)}" aria-label="Add ${esc(s.title || s.name || '')} to ${esc(list.name)}">+</button>
+</div>`).join('');
+observeImages(panel);
+} catch (e) {
+panel.querySelector('.similar-suggest-body').innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem">Suggestions unavailable right now.</p>';
+}
+}
+function addSimilarItem(listId, id, type, title, poster) {
+const lists = Store.get('custom_lists', []);
+const list = lists.find(l => l.id === listId);
+if (!list) return;
+if (list.items.some(x => String(x.id) === String(id) && x.media_type === type)) { toast('Already in this list', 'info'); return; }
+list.items.push({ id: String(id), media_type: type, title, poster_path: poster, vote_average: 0, genre_ids: [] });
+Store.set('custom_lists', lists);
+renderCustomLists();
+toast(`Added “${title}” to ${list.name}`, 'success');
+}
+// B4: pointer-based drag-to-reorder via the ⠿ grip (works for mouse + touch;
+// the rest of the card keeps its normal click/drag-scroll behavior).
+function initListReorderGrips(container) {
+container.querySelectorAll('.list-grip').forEach(grip => {
+if (grip.dataset.wired) return;
+grip.dataset.wired = '1';
+grip.addEventListener('pointerdown', e => {
+e.preventDefault();
+e.stopPropagation();
+const wrap = grip.closest('.card-wrap');
+const row = grip.closest('.scroll-row');
+if (!wrap || !row) return;
+const listId = parseInt(row.id.replace('list_', ''), 10);
+const lists = Store.get('custom_lists', []);
+const list = lists.find(l => l.id === listId);
+if (!list) return;
+const wraps = [...row.querySelectorAll(':scope > .card-wrap')];
+const startIndex = wraps.indexOf(wrap);
+const ghost = wrap.cloneNode(true);
+ghost.className = 'reorder-ghost';
+ghost.style.width = wrap.getBoundingClientRect().width + 'px';
+document.body.appendChild(ghost);
+wrap.classList.add('reorder-dim');
+const move = ev => {
+const gx = ev.clientX - ghost.offsetWidth / 2, gy = ev.clientY - ghost.offsetHeight / 2;
+ghost.style.left = gx + 'px';
+ghost.style.top = gy + 'px';
+const target = wraps.findIndex(w => {
+const r = w.getBoundingClientRect();
+return ev.clientX >= r.left && ev.clientX <= r.right;
+});
+if (target > -1 && target !== startIndex) {
+const rect = wraps[target].getBoundingClientRect();
+wrap.style.transform = target > startIndex ? `translateX(${rect.right - wrap.getBoundingClientRect().left}px)` : `translateX(${rect.left - wrap.getBoundingClientRect().left}px)`;
+wraps.forEach((w, i) => w.classList.toggle('reorder-shift', (target > startIndex && i > startIndex && i <= target) || (target < startIndex && i >= target && i < startIndex)));
+} else {
+wrap.style.transform = '';
+wraps.forEach(w => w.classList.remove('reorder-shift'));
+}
+ghost._target = target;
+};
+const up = ev => {
+document.removeEventListener('pointermove', move);
+document.removeEventListener('pointerup', up);
+ghost.remove();
+wrap.classList.remove('reorder-dim', 'reorder-shift');
+wrap.style.transform = '';
+wraps.forEach(w => w.classList.remove('reorder-shift'));
+const target = ghost._target;
+if (Number.isInteger(target) && target !== startIndex && target > -1) {
+const [moved] = list.items.splice(startIndex, 1);
+list.items.splice(target, 0, moved);
+Store.set('custom_lists', lists);
+renderCustomLists();
+announce(`Moved ${moved.title || 'item'} to position ${target + 1}`);
+}
+};
+ghost.style.left = (e.clientX - ghost.offsetWidth / 2) + 'px';
+ghost.style.top = (e.clientY - ghost.offsetHeight / 2) + 'px';
+document.addEventListener('pointermove', move);
+document.addEventListener('pointerup', up);
+});
+});
+}
+
+// ============ B6: TRENDING IN YOUR GENRES ============
+// Top genres are derived from what this profile has actually watched/saved
+// (via the media cache's genre_ids), then /trending/all/week is filtered and
+// re-ranked to match. Hidden entirely when there's no signal yet.
+function computeTopGenres(limit = 3) {
+const counts = {};
+const bump = id => { if (id) counts[id] = (counts[id] || 0) + 1; };
+const harvest = arr => (arr || []).forEach(x => {
+const c = getCached(x.id, x.type);
+(c.genre_ids || []).forEach(gid => bump(gid));
+});
+harvest(Store.get('recently_viewed'));
+harvest(Store.get('watchlist'));
+harvest(Store.get('continue_watching'));
+harvest(Store.get('watch_diary', []));
+return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => parseInt(id, 10));
+}
+function renderTrendingInYourGenres(trendingItems) {
+const section = document.getElementById('trendingGenresSection');
+if (!section) return;
+const top = computeTopGenres(3);
+if (!top.length || !trendingItems || !trendingItems.length) { section.style.display = 'none'; return; }
+const names = top.map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
+if (!names.length) { section.style.display = 'none'; return; }
+const matches = trendingItems
+.filter(i => (i.genre_ids || []).some(gid => top.includes(gid)) && (i.backdrop_path || i.poster_path))
+.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+if (matches.length < 4) { section.style.display = 'none'; return; }
+document.getElementById('trendingGenresTitle').textContent = `🔥 TRENDING IN ${names.slice(0, 2).join(' & ').toUpperCase()}`;
+section.style.display = 'block';
+renderContentRow('trendingGenres', matches.slice(0, 20));
+}
+
+
 // Replaces all inline onclick/onkeypress/onerror handlers (CSP-friendly, easier
 // to trace). Generated HTML uses data-action="..." attributes; one delegated
 // listener dispatches to the right handler. Globals referenced via `window.*`
@@ -1590,7 +2090,19 @@ const ACTION_HANDLERS = {
 'dismiss-pwa'(el) { const banner = el.closest('.pwa-banner'); window.dismissPWA(banner); },
 'go-to-banner'(el) { window.goToBanner(parseInt(el.dataset.index, 10)); },
 'retry-banner'() { initBanner(); },
-'select-genre'(el) { window.selectGenre(parseInt(el.dataset.id, 10), el.dataset.name); },
+'select-genre'(el) { window.openGenreDeepDive(el.dataset.id, el.dataset.name); }, // B5: deep-dive page with URL state
+'open-franchise'(el) { window.openFranchise(el.dataset.id, el.dataset.name); }, // B3
+'retry-franchise'(el) { window.openFranchise(el.dataset.id, el.dataset.name); }, // B3
+'share-custom-list'(el) { // B4: link carries the list itself
+const list = Store.get('custom_lists', []).find(l => l.id === parseInt(el.dataset.id, 10));
+if (!list) return;
+const link = customListShareLink(list);
+if (navigator.share) navigator.share({ title: `${list.name} — VOID collection`, url: link }).then(() => toast('Shared!', 'success')).catch(() => {});
+else if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => toast('Collection link copied!', 'success')).catch(() => toast('Failed to copy', 'error'));
+else toast('Copy not supported on this browser', 'warning');
+},
+'add-similar'(el) { window.addSimilarToList(parseInt(el.dataset.id, 10), el); }, // B4
+'add-similar-item'(el) { window.addSimilarItem(parseInt(el.dataset.list, 10), el.dataset.id, el.dataset.type, el.dataset.title, el.dataset.poster); }, // B4
 'select-mood'(el) { window.selectMood(el.dataset.mood); },
 'shuffle-mood-row'(el) { window.shuffleMoodRow(el.dataset.key); },
 'send-ai-suggestion'(el) { document.getElementById('aiChatInput').value = el.dataset.msg; window.sendAIMessage(); },
@@ -1716,6 +2228,9 @@ loadAIRecommendations();
     initProfiles();
     initCollections();
     initCustomLists();
+    initMoodFab(); // B1: mood shuffle FAB
+    initDeepDive(); // B5: deep-dive filters + URL state (also hydrates ?section=genre&id=…)
+    importCustomListFromUrl(); // B4: shared-collection arrival (?cl=…)
     renderDiary();
     initDiaryExport();
     initPWA();
@@ -1728,7 +2243,7 @@ loadAIRecommendations();
     // — both had no handlers anywhere. Section shortcuts scroll to their row;
     // shared text/urls land in the search box.
     const sectionParam = params.get('section');
-    if (sectionParam) scrollToSection(sectionParam);
+    if (sectionParam && !(sectionParam === 'genre' && params.get('id'))) scrollToSection(sectionParam); // genre URLs are handled by the deep-dive hydrator
     if (window.location.pathname.replace(/\/+$/, '').endsWith('/share')) {
       const shared = params.get('text') || params.get('title') || params.get('url') || '';
       if (shared) { const si = document.getElementById('searchInput'); si.value = shared; searchMedia(shared); toast('Searching shared content…', 'info'); }
@@ -1985,7 +2500,7 @@ if (seq !== state.openSeq) return; // L-05: a newer openMedia superseded this on
 state.currentDetails = details;
 // L-13: carry the details' year/rating into the media cache so watchlist adds
 // from the modal save an accurate snapshot too.
-cacheMedia(id, type, details.title || details.name || '', details.poster_path || '', { year: (details.release_date || details.first_air_date || '').split('-')[0], rating: details.vote_average || 0 });
+cacheMedia(id, type, details.title || details.name || '', details.poster_path || '', { year: (details.release_date || details.first_air_date || '').split('-')[0], rating: details.vote_average || 0, genre_ids: (details.genres || []).map(g => g.id) }); // B6: modal details carry the strongest genre signal
 displayDetails(details, type);
 loadAIPitch(id, type, details, seq); // A3: spoiler-free one-liner (cached 7d, hides on failure)
 updateSEO(details.title || details.name, details.overview, type, `${IMG}${details.poster_path}`);
@@ -2036,6 +2551,7 @@ document.getElementById('modalActions').innerHTML = `
     <button class="btn btn-outline btn-sm" data-action="add-to-diary" data-id="${d.id}" data-type="${type}">📖 DIARY</button>
 `;
 document.getElementById('modalGenres').innerHTML = (d.genres || []).map(g => `<span class="modal-genre">${esc(g.name)}</span>`).join('');
+renderFranchiseChip(d); // B3: franchise hub entry when the movie belongs to a collection
 document.getElementById('modalOverview').textContent = d.overview || 'No overview available.';
 let extra = '';
 if (type === 'movie') {
@@ -2599,8 +3115,14 @@ const lists = Store.get('custom_lists', []);
 const container = document.getElementById('customListsContainer');
 container.innerHTML = lists.map(list => `<div class="custom-list-row">
   <div class="custom-list-header">
-    <div class="custom-list-name">${esc(list.name)}</div>
+    ${listCollageHTML(list.items)}
+    <div class="custom-list-name-wrap">
+      <div class="custom-list-name">${esc(list.name)}</div>
+      <div class="custom-list-count">${list.items.length} title${list.items.length !== 1 ? 's' : ''} · drag ⠿ to reorder</div>
+    </div>
     <div class="custom-list-actions">
+      <button class="custom-list-btn" data-action="add-similar" data-id="${list.id}" aria-label="Get similar title suggestions for ${esc(list.name)}">✨ SIMILAR</button>
+      <button class="custom-list-btn" data-action="share-custom-list" data-id="${list.id}" aria-label="Share collection ${esc(list.name)}">↗ SHARE</button>
       <button class="custom-list-btn" data-action="delete-custom-list" data-id="${list.id}" aria-label="Delete list ${esc(list.name)}">🗑</button>
     </div>
   </div>
@@ -2610,7 +3132,21 @@ container.innerHTML = lists.map(list => `<div class="custom-list-row">
     </div>
   </div>
 </div>`).join('');
-lists.forEach(list => { if (list.items.length) renderContentRow(`list_${list.id}`, list.items); });
+lists.forEach(list => { if (list.items.length) renderContentRow(`list_${list.id}`, list.items.map(x => ({ ...x, media_type: x.media_type || 'movie' }))); });
+// B4: reorder grips on every card in every custom list (positioned overlay
+// button; the card's own click behavior is untouched).
+container.querySelectorAll('.scroll-row[id^="list_"]').forEach(row => {
+row.querySelectorAll(':scope > .card-wrap').forEach(wrap => {
+if (wrap.querySelector('.list-grip')) return;
+const g = document.createElement('button');
+g.type = 'button';
+g.className = 'list-grip';
+g.setAttribute('aria-label', 'Reorder item');
+g.textContent = '⠿';
+wrap.appendChild(g);
+});
+});
+initListReorderGrips(container);
 }
 function deleteCustomList(id) {
 let lists = Store.get('custom_lists', []);

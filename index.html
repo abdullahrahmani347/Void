@@ -334,6 +334,18 @@
             </div>
         </section>
 
+        <!-- B6: trending filtered to this viewer's most-watched genres -->
+        <section class="content-section" id="trendingGenresSection" style="display:none" aria-label="Trending in your genres">
+            <div class="section-header">
+                <h2 class="section-title" id="trendingGenresTitle">🔥 TRENDING IN YOUR GENRES</h2>
+            </div>
+            <div class="scroll-row-wrapper"><button class="scroll-arrow left" data-target="trendingGenres"
+                    aria-label="Scroll left">‹</button>
+                <div class="scroll-row" id="trendingGenres"></div><button class="scroll-arrow right"
+                    data-target="trendingGenres" aria-label="Scroll right">›</button>
+            </div>
+        </section>
+
         <!-- Trending Movies -->
         <section class="content-section" id="movies" aria-label="Trending movies">
             <div class="section-header">
@@ -421,6 +433,49 @@
             </div>
         </section>
 
+        <!-- B5: genre deep-dive — sticky filter bar, shareable URL state -->
+        <section class="content-section genre-deep-dive" id="genreDeepDiveSection" hidden aria-label="Genre deep dive">
+            <div class="section-header">
+                <h2 class="section-title" id="deepDiveTitle">GENRE</h2>
+            </div>
+            <div class="deep-dive-filters" id="deepDiveFilters" role="group" aria-label="Genre filters">
+                <select class="filter-select" id="ddYearFrom" aria-label="Year from"><option value="">From year</option></select>
+                <select class="filter-select" id="ddYearTo" aria-label="Year to"><option value="">To year</option></select>
+                <select class="filter-select" id="ddRating" aria-label="Minimum rating">
+                    <option value="">Any rating</option>
+                    <option value="7">7+</option>
+                    <option value="8">8+</option>
+                    <option value="9">9+</option>
+                </select>
+                <select class="filter-select" id="ddRuntime" aria-label="Maximum runtime">
+                    <option value="">Any runtime</option>
+                    <option value="90">≤ 90 min</option>
+                    <option value="120">≤ 2 hrs</option>
+                    <option value="150">≤ 2.5 hrs</option>
+                    <option value="180">≤ 3 hrs</option>
+                </select>
+                <select class="filter-select" id="ddProvider" aria-label="Watch provider">
+                    <option value="">Any provider</option>
+                    <option value="8">Netflix</option>
+                    <option value="9">Prime Video</option>
+                    <option value="33">Disney+</option>
+                    <option value="15">Hulu</option>
+                    <option value="189">Max</option>
+                    <option value="350">Apple TV+</option>
+                </select>
+                <select class="filter-select" id="ddCert" aria-label="Certification">
+                    <option value="">Any age</option>
+                    <option value="G">G</option>
+                    <option value="PG">PG</option>
+                    <option value="PG-13">PG-13</option>
+                    <option value="R">R</option>
+                </select>
+                <button type="button" class="btn btn-outline btn-sm" id="ddClear">CLEAR</button>
+            </div>
+            <div class="deep-dive-grid" id="deepDiveGrid" role="list"></div>
+            <div style="text-align:center;margin-top:1rem"><button class="load-more-btn" id="ddMore" hidden>LOAD MORE</button></div>
+        </section>
+
         <!-- Collections -->
         <section class="content-section" id="collectionsSection" aria-label="Collections">
             <div class="section-header">
@@ -443,6 +498,20 @@
             <div class="diary-heatmap" id="diaryHeatmap" aria-label="Watch activity heatmap"></div>
             <div class="diary-entries" id="diaryEntries"></div>
         </section>
+
+        <!-- B3: franchise hub — ordered parts, total runtime, watchlist badges -->
+        <div class="franchise-overlay" id="franchiseModal" role="dialog" aria-modal="true" aria-labelledby="franchiseTitle">
+            <div class="franchise-panel">
+                <div class="franchise-head">
+                    <div>
+                        <h3 class="franchise-title" id="franchiseTitle">Collection</h3>
+                        <p class="franchise-sub" id="franchiseSub"></p>
+                    </div>
+                    <button class="ai-chat-close" id="franchiseClose" aria-label="Close franchise hub">✕</button>
+                </div>
+                <div class="franchise-body" id="franchiseBody"></div>
+            </div>
+        </div>
 
     </main>
 
@@ -516,6 +585,9 @@
                             <h2 class="modal-title" id="modalTitle"></h2>
                             <div class="modal-meta" id="modalMeta" aria-label="Movie details"></div>
                             <div class="modal-genres" id="modalGenres" aria-label="Genres"></div>
+                            <!-- B3: franchise hub entry point when the movie belongs
+                                 to a TMDB collection -->
+                            <div id="franchiseChipSlot"></div>
                             <div class="modal-actions" id="modalActions" role="group" aria-label="Actions"></div>
                         </div>
                     </div>
@@ -827,6 +899,17 @@
             <span>Profile</span>
         </button>
     </nav>
+
+    <!-- B1: mood shuffle FAB — random pick matching a random mood matrix -->
+    <button type="button" class="mood-fab" id="moodFab" aria-label="Surprise pick for my mood" title="Mood shuffle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="4" />
+            <circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none" />
+            <circle cx="15.5" cy="15.5" r="1.4" fill="currentColor" stroke="none" />
+            <circle cx="15.5" cy="8.5" r="1.4" fill="currentColor" stroke="none" />
+            <circle cx="8.5" cy="15.5" r="1.4" fill="currentColor" stroke="none" />
+        </svg>
+    </button>
 
     <script src="app.js"></script>
     <script src="a11y.js"></script>
