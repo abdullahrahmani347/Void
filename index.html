@@ -146,6 +146,19 @@
                         class="spinner-ring"></span></div>
                 <div class="search-results" id="searchResults" role="listbox" aria-label="Search results"></div>
             </div>
+            <!-- A1: natural-language "Ask anything" — works with the AI endpoint
+                 AND without it (local keyword dictionary fallback). -->
+            <div class="ask-anything" id="askAnything">
+                <svg class="ask-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" aria-hidden="true">
+                    <path d="M12 2l1.9 5.8L20 9l-5.8 1.9L12 17l-2.2-6.1L4 9l6.1-1.2z" />
+                </svg>
+                <input type="text" class="ask-input" id="askInput" autocomplete="off" maxlength="200"
+                    placeholder="Ask anything… “mind-bending 90s sci-fi like The Matrix”"
+                    aria-label="Describe what you want to watch in your own words">
+                <button type="button" class="btn btn-primary btn-sm ask-btn" id="askBtn">ASK</button>
+            </div>
+            <div class="nl-chip-host" id="nlChipHost" style="display:none" role="status" aria-label="Active interpreted search"></div>
             <div class="search-filters" id="searchFilters" role="group" aria-label="Filter search results">
                 <button class="search-filter-btn active" data-filter="multi" aria-pressed="true">All</button>
                 <button class="search-filter-btn" data-filter="movie" aria-pressed="false">Movies</button>
@@ -305,6 +318,9 @@
                     data-target="top10Row" aria-label="Scroll right">›</button>
             </div>
         </section>
+
+        <!-- A2: curated mood rows (lazy-loaded discover matrices) -->
+        <div id="moodRowsHost"></div>
 
         <!-- New This Week -->
         <section class="content-section" id="newThisWeekSection" aria-label="New this week">
@@ -518,6 +534,13 @@
                 </div>
                 <div class="modal-tab-content active" id="tabOverview" role="tabpanel">
                     <p class="modal-overview" id="modalOverview"></p>
+                    <!-- A3: spoiler-free AI one-liner — hidden until a pitch is
+                         available; core UX never depends on it. -->
+                    <div class="ai-pitch" id="aiPitch" hidden>
+                        <span class="ai-pitch-badge" aria-hidden="true">✨ AI</span>
+                        <span class="ai-pitch-label">Why you'll like this:</span>
+                        <span class="ai-pitch-text"></span>
+                    </div>
                     <div class="modal-extra-info" id="modalExtraInfo" aria-label="Additional information"></div>
                     <div class="add-to-list-section">
                         <div style="position:relative;display:inline-block">

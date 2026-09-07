@@ -512,49 +512,26 @@ if (dec) { const y = parseInt((it.release_date || it.first_air_date || '').slice
 return true;
 });
 }
-// L-10: the model used to hardcode /discover/movie (TV could never be answered)
-// and its raw output went straight into the URL. The reply is now validated
-// against a parameter allowlist with sane values, and the endpoint follows the
-// media type the model picks (sanity-checked against the query text).
-const DISCOVER_ALLOWLIST = new Set(['with_genres', 'primary_release_date.gte', 'primary_release_date.lte', 'first_air_date.gte', 'first_air_date.lte', 'with_runtime.gte', 'with_runtime.lte', 'vote_average.gte', 'vote_count.gte', 'vote_count.lte', 'sort_by', 'with_original_language', 'year', 'first_air_date_year']);
-function sanitizeDiscoverParams(raw, type) {
-const out = new URLSearchParams();
-if (!raw) return '';
-String(raw).split('&').forEach(pair => {
-const i = pair.indexOf('=');
-if (i < 1) return;
-const k = pair.slice(0, i).trim();
-const v = pair.slice(i + 1).trim();
-if (!DISCOVER_ALLOWLIST.has(k)) return; // drop unknown/hallucinated params
-let decoded = v;
-try { decoded = decodeURIComponent(v); } catch (e) { return; }
-if (!/^[\w .,:\-+%|]{0,60}$/.test(decoded)) return; // value sanity
-if ((k === 'primary_release_date.gte' || k === 'primary_release_date.lte' || k === 'year') && type !== 'movie') return;
-if ((k === 'first_air_date.gte' || k === 'first_air_date.lte' || k === 'first_air_date_year') && type !== 'tv') return;
-out.set(k, v);
-});
-return out.toString();
-}
+// L-10 (superseded): the old client-side param sanitizer is gone — model
+// output is now validated SERVER-SIDE against a strict JSON schema
+// (netlify/functions/ai.js), so the client never parses model text at all.
 function detectMediaTypeFromQuery(q) { return /\b(tv|series|show|shows|episode|season|anime|sitcom)\b/i.test(q) ? 'tv' : 'movie'; }
-document.getElementById('nlSearchBtn').addEventListener('click', async () => {
+// A1 (Phase 2): the advanced-panel AI button now rides the same hardened
+// server action as the "Ask anything" box — one validated code path.
+document.getElementById('nlSearchBtn').addEventListener('click', () => {
 const q = input.value.trim();
 if (!q) return;
-toast('Interpreting your search with AI...', 'info');
-showSearchSpinner(true);
-try {
-const prompt = `The user wants to find a movie or a TV show. Their description: "${q}". Their filters: decade=${state.advDecade || 'any'}, max runtime=${state.advRuntime || 'any'}, min rating=${state.advRating || 'any'}. First decide whether media_type is "movie" or "tv". Then return a TMDB /discover query string (only the parameters after the '?', no base URL, do NOT include an api_key parameter). Reply in exactly this format: media_type|parameter_string`;
-const raw = await callClaude([{ role: 'user', content: prompt }]);
-const [aiTypeRaw, aiParamsRaw] = String(raw).trim().split('|');
-const type = String(aiTypeRaw || '').trim() === 'tv' ? 'tv' : (String(aiTypeRaw || '').trim() === 'movie' ? 'movie' : detectMediaTypeFromQuery(q));
-// Chips ALWAYS apply (L-09); validated model params are merged in (L-10).
-const clean = new URLSearchParams(sanitizeDiscoverParams(aiParamsRaw, type));
-new URLSearchParams(advancedFilterParams(type)).forEach((v, k) => { if (!clean.has(k)) clean.set(k, v); });
-const qs = clean.toString();
-const res = await tmdbList(`/discover/${type}${qs ? '?' + qs : ''}`);
-displaySearchResults(res.slice(0, 10).map(m => ({ ...m, media_type: type })), advancedFilterNote());
-saveSearchHistory(q); // V-01: only executed searches enter history
-} catch (e) { toast('AI search unavailable — using filtered standard search', 'warning'); searchMedia(q); }
+runAskAnything(q, advancedFilterParams(detectMediaTypeFromQuery(q)));
 });
+// A1: "Ask anything" — describe what you're in the mood for in plain words.
+// With no LLM configured the request 501s and the local dictionary answers.
+const askInput = document.getElementById('askInput');
+const askBtn = document.getElementById('askBtn');
+if (askInput && askBtn) {
+const go = () => runAskAnything(askInput.value);
+askBtn.addEventListener('click', go);
+askInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+}
 }
 function saveSearchHistory(q) {
 if (q.length < 3) return;
@@ -1301,7 +1278,7 @@ const found = (res.results || []).find(r => (r.media_type === 'movie' || r.media
 if (found) mediaCards.push({ id: found.id, type: found.media_type, title: found.title || found.name, poster: found.poster_path });
 } catch { }
 }
-addAIMessage('ai', cleanReply || reply, mediaCards);
+addAIMessage('ai', stripMarkdown(cleanReply || reply), mediaCards); // A4: markdown stripped, textContent-rendered
 } catch (e) {
 typing.remove();
 // L-12: pop the unanswered user turn so the history keeps strict message
@@ -1309,6 +1286,270 @@ typing.remove();
 if (state.aiChatHistory.length && state.aiChatHistory[state.aiChatHistory.length - 1].role === 'user') state.aiChatHistory.pop();
 addAIMessage('ai', "Sorry, I couldn't connect right now. Try again in a moment.");
 }
+}
+
+// ============ AI CONCIERGE 2.0 (Phase 2) ============
+// Single entry point for every AI feature. `payload` is one of:
+//   { messages:[...] }                     → concierge chat (legacy shape)
+//   { action:'discover', query }           → NL → server-validated TMDB params
+//   { action:'pitch', title, year, genres }→ one spoiler-free sentence
+// The server owns the key, the prompts and output validation. Every failure
+// here is a signal for the caller to fall back to its non-AI path — core
+// browsing NEVER depends on this endpoint being up.
+async function callAI(payload) {
+beginFetch();
+try {
+const r = await fetch('/.netlify/functions/ai', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify(payload)
+});
+const d = await r.json().catch(() => null);
+if (!r.ok || !d) { const err = new Error(d && d.error ? String(d.error) : 'AI error'); err.status = r.status; throw err; }
+return d;
+} finally { endFetch(); }
+}
+
+// A1 fallback: curated local keyword → TMDB-filter dictionary. When the LLM
+// is unavailable (no key, 501, rate limit, offline) the "Ask anything" box
+// STILL works — it matches the query against this table instead of a model.
+const NL_DICT = [
+{ re: /\b(mind.?bend\w*|twist\w*|brain.?teas\w*|puzzle\w*|inception|matrix)\b/i, genres: [878, 9648], rating: 7, label: 'mind-bending' },
+{ re: /\b(sci.?fi|space|alien\w*|cyberpunk|dystop\w*|future)\b/i, genres: [878], label: 'sci-fi' },
+{ re: /\b(funny|comed\w*|laugh\w*|hilarious|sitcom)\b/i, genres: [35], label: 'comedy' },
+{ re: /\b(scary|horror|creepy|haunt\w*|zombie|slasher|ghost)\b/i, genres: [27], label: 'horror' },
+{ re: /\b(romantic|romance|love stor\w*|date night)\b/i, genres: [10749], label: 'romance' },
+{ re: /\b(cozy|comfort\w*|gentle|wholesome|heartwarming)\b/i, genres: [10751, 35], rating: 6.5, label: 'cozy' },
+{ re: /\b(feel.?good|uplifting|cheerful|heartwarming)\b/i, genres: [35, 10751], rating: 6.5, label: 'feel-good' },
+{ re: /\b(adrenaline|action.?pack\w*|explosi\w*|blockbuster|fast.?paced)\b/i, genres: [28, 53], rating: 6.5, label: 'action' },
+{ re: /\b(thriller|heist|suspense|cat.?and.?mouse|spy)\b/i, genres: [53, 80], rating: 6.8, label: 'thriller' },
+{ re: /\b(nostalgi\w*|retro|classic|old.?school)\b/i, genres: [], from: 1970, to: 2005, rating: 6.5, label: 'nostalgic' },
+{ re: /\b(true stor\w*|based on|biopic|historic\w*)\b/i, genres: [36], label: 'based on real events' },
+{ re: /\b(kids?\b|family|children)\b/i, genres: [10751], label: 'family' },
+{ re: /\b(anime|animated|cartoon|pixar|disney)\b/i, genres: [16], label: 'animation' },
+{ re: /\b(detective|murder|crime|mafia|gangster)\b/i, genres: [80], label: 'crime' },
+{ re: /\b(drama|emotional|tearjerker|touching)\b/i, genres: [18], label: 'drama' },
+{ re: /\b(fantasy|magic\w*|dragon|wizard)\b/i, genres: [14], label: 'fantasy' },
+{ re: /\b(war|military|battlefield)\b/i, genres: [10752], label: 'war' },
+{ re: /\b(western|cowboy)\b/i, genres: [37], label: 'western' },
+{ re: /\b(sports?|football|basketball|boxing)\b/i, genres: [], label: 'sports' }
+];
+const DECADE_RE = /\b((?:19|20)\d0)s?\b/;
+
+function localNLSearch(q) {
+const params = new URLSearchParams();
+const gids = new Set();
+let rating = 0, from = 0, to = 0;
+const labels = [];
+NL_DICT.forEach(rule => {
+if (!rule.re.test(q)) return;
+labels.push(rule.label);
+(rule.genres || []).forEach(g => gids.add(g));
+if (rule.rating > rating) rating = rule.rating;
+if (rule.from && (!from || rule.from < from)) from = rule.from;
+if (rule.to && (!to || rule.to > to)) to = rule.to;
+});
+const dm = q.match(DECADE_RE);
+if (dm) { const start = parseInt(dm[1], 10); from = start; to = start + 9; labels.push(dm[1] + 's'); }
+const isTV = detectMediaTypeFromQuery(q) === 'tv';
+if (gids.size) params.set('with_genres', [...gids].slice(0, 3).join(','));
+if (rating) { params.set('vote_average.gte', String(rating)); params.set('vote_count.gte', '50'); }
+if (from) {
+params.set(isTV ? 'first_air_date.gte' : 'primary_release_date.gte', from + '-01-01');
+if (to) params.set(isTV ? 'first_air_date.lte' : 'primary_release_date.lte', to + '-12-31');
+}
+// Nothing matched at all → popular picks, so the box never dead-ends.
+params.set('sort_by', rating >= 7 ? 'vote_average.desc' : 'popularity.desc');
+return { media_type: isTV ? 'tv' : 'movie', params: params.toString(), interpreted: labels.join(' · ') };
+}
+
+// A1: the query the user asked for stays visible as a removable chip above
+// the filters, with an honest badge of WHERE the interpretation came from.
+function showNLChip(q, source) {
+const host = document.getElementById('nlChipHost');
+if (!host) return;
+host.style.display = 'flex';
+host.innerHTML = `<button type="button" class="nl-chip" aria-label="Interpreted search active: ${esc(q)}. Click to remove.">
+<span class="nl-chip-badge">${source === 'ai' ? '✨ AI' : '⌂ QUICK'}</span>
+<span class="nl-chip-text">${esc(q)}</span>
+<span class="nl-chip-x" aria-hidden="true">✕</span></button>`;
+host.querySelector('.nl-chip').addEventListener('click', () => { host.style.display = 'none'; host.innerHTML = ''; });
+}
+
+async function runAskAnything(q, extraParams) {
+q = String(q || '').trim();
+if (!q) { toast('Type what you feel like watching', 'warning'); return; }
+showSearchSpinner(true);
+announce('Interpreting your description');
+let source = 'ai';
+let filters = null;
+try {
+const d = await callAI({ action: 'discover', query: q.slice(0, 200) });
+if (!d || !d.ok || !d.params) throw new Error('bad ai payload');
+filters = { media_type: d.media_type === 'tv' ? 'tv' : 'movie', params: d.params, interpreted: d.interpreted || '' };
+} catch (e) {
+// Honest fallback: no LLM → the local dictionary still answers.
+source = 'local';
+filters = localNLSearch(q);
+}
+// L-09 parity: the advanced-panel chips still constrain this path — they
+// fill any filter gap the AI/lokal interpretation left open.
+if (extraParams) {
+const merged = new URLSearchParams(filters.params);
+new URLSearchParams(extraParams).forEach((v, k) => { if (!merged.has(k)) merged.set(k, v); });
+filters.params = merged.toString();
+}
+try {
+let items = await tmdbList(`/discover/${filters.media_type}?${filters.params}`);
+if (!items.length) {
+// One loosened retry: drop rating/date caps, keep genre + sort.
+const loose = new URLSearchParams();
+['with_genres', 'with_keywords', 'sort_by'].forEach(k => { const v = new URLSearchParams(filters.params).get(k); if (v) loose.set(k, v); });
+if (!loose.has('sort_by')) loose.set('sort_by', 'popularity.desc');
+filters.params = loose.toString();
+items = await tmdbList(`/discover/${filters.media_type}?${filters.params}`);
+}
+const results = items.slice(0, 10).map(m => ({ ...m, media_type: filters.media_type }));
+showNLChip(q, source);
+displaySearchResults(results, filters.interpreted ? (source === 'ai' ? 'AI read: ' + filters.interpreted : 'Matched: ' + filters.interpreted) : '');
+saveSearchHistory(q);
+} catch (e) {
+toast('Nothing found for that description', 'warning');
+} finally { showSearchSpinner(false); }
+}
+
+// ============ A2: MOOD ROWS (curated discover matrices on Home) ============
+// Static, hand-tuned genre+rating(+year) matrices — no AI involved. Rows load
+// lazily as they near the viewport; each has a shuffle that jumps to a random
+// results page.
+const MOOD_ROWS = [
+{ key: 'cozy', title: '🕯 COZY NIGHT IN', aria: 'Cozy Night In', genres: '10751,35', rating: 6.8, votes: 100 },
+{ key: 'mindbend', title: '🌀 MIND-BENDING', aria: 'Mind-Bending', genres: '878,9648', rating: 7.2, votes: 300 },
+{ key: 'feelgood', title: '☀️ FEEL-GOOD', aria: 'Feel-Good', genres: '35,10751', rating: 6.8, votes: 100 },
+{ key: 'adrenaline', title: '⚡ ADRENALINE RUSH', aria: 'Adrenaline Rush', genres: '28,53', rating: 6.8, votes: 300 },
+{ key: 'nostalgia', title: '📻 NOSTALGIA TRIP', aria: 'Nostalgia Trip', genres: '18,10749', from: 1970, to: 2005, rating: 6.8, votes: 200 }
+];
+function moodRowParams(m, page) {
+const p = new URLSearchParams();
+if (m.genres) p.set('with_genres', m.genres);
+if (m.rating) { p.set('vote_average.gte', String(m.rating)); p.set('vote_count.gte', String(m.votes || 100)); }
+if (m.from) p.set('primary_release_date.gte', m.from + '-01-01');
+if (m.to) p.set('primary_release_date.lte', m.to + '-12-31');
+p.set('sort_by', 'popularity.desc');
+if (page > 1) p.set('page', String(page));
+return p.toString();
+}
+function initMoodRows() {
+const host = document.getElementById('moodRowsHost');
+if (!host || host.dataset.wired) return;
+host.dataset.wired = '1';
+host.innerHTML = MOOD_ROWS.map(m => `
+<section class="content-section mood-row-section" id="moodRow_${m.key}" data-mood-row="${m.key}" aria-label="${esc(m.aria)}" hidden>
+<div class="section-header">
+<h2 class="section-title">${esc(m.title)}</h2>
+<button class="load-more-btn mood-shuffle" data-action="shuffle-mood-row" data-key="${m.key}" aria-label="Shuffle ${esc(m.aria)} picks">⇄ SHUFFLE</button>
+</div>
+<div class="scroll-row-wrapper">
+<button class="scroll-arrow left" data-target="moodRowList_${m.key}" aria-label="Scroll left">‹</button>
+<div class="scroll-row" id="moodRowList_${m.key}"></div>
+<button class="scroll-arrow right" data-target="moodRowList_${m.key}" aria-label="Scroll right">›</button>
+</div>
+</section>`).join('');
+// The generic initScrollArrows() ran before these sections existed — wire
+// this row's arrows here with the same behavior.
+host.querySelectorAll('.scroll-arrow').forEach(btn => {
+btn.addEventListener('click', () => {
+const target = document.getElementById(btn.dataset.target);
+if (target) target.scrollBy({ left: btn.classList.contains('left') ? -300 : 300, behavior: 'smooth' });
+});
+});
+if ('IntersectionObserver' in window) {
+const io = new IntersectionObserver(entries => {
+entries.forEach(en => {
+if (!en.isIntersecting) return;
+io.unobserve(en.target);
+loadMoodRow(en.target.dataset.moodRow);
+});
+}, { rootMargin: '300px 0px' });
+host.querySelectorAll('[data-mood-row]').forEach(s => io.observe(s));
+} else MOOD_ROWS.forEach(m => loadMoodRow(m.key));
+}
+async function loadMoodRow(key, page) {
+const m = MOOD_ROWS.find(x => x.key === key);
+const row = document.getElementById('moodRowList_' + key);
+const section = document.getElementById('moodRow_' + key);
+if (!m || !row || !section) return;
+if (!page) section.hidden = false;
+renderSkeletons('moodRowList_' + key, 10);
+try {
+let items = await tmdbList(`/discover/movie?${moodRowParams(m, page || 1)}`);
+if (!items.length) {
+// Loosen once before declaring the row empty.
+const loose = new URLSearchParams();
+if (m.genres) loose.set('with_genres', m.genres);
+loose.set('sort_by', 'popularity.desc');
+items = await tmdbList(`/discover/movie?${loose.toString()}`);
+}
+if (!items.length) { section.hidden = true; return; }
+renderContentRow('moodRowList_' + key, items.map(x => ({ ...x, media_type: 'movie' })));
+} catch (e) { renderSectionError('moodRowList_' + key, () => loadMoodRow(key)); }
+}
+function shuffleMoodRow(key) {
+loadMoodRow(key, 1 + Math.floor(Math.random() * 5));
+announce('Shuffling mood picks');
+}
+
+// ============ A3: SPOILER-FREE "WHY YOU'LL LIKE THIS" ============
+// One AI line per title in the detail modal, cached 7 days per title. The
+// server prompt sees only title/year/genres and is spoiler-safe; ANY failure
+// keeps the line hidden — the modal never depends on it.
+const PITCH_TTL = 7 * 24 * 60 * 60 * 1000;
+function pitchCacheKey(id, type) { return 'pitch_' + type + '_' + id; }
+async function loadAIPitch(id, type, details, seq) {
+const box = document.getElementById('aiPitch');
+if (!box) return;
+box.hidden = true;
+box.classList.remove('active');
+let cached = null;
+try { cached = JSON.parse(localStorage.getItem('void_' + pitchCacheKey(id, type)) || 'null'); } catch (e) {}
+if (cached && cached.text && (Date.now() - cached.ts) < PITCH_TTL) { showPitch(cached.text); return; }
+try {
+const d = await callAI({
+action: 'pitch',
+media_type: type,
+title: details.title || details.name || '',
+year: parseInt((details.release_date || details.first_air_date || '').slice(0, 4), 10) || undefined,
+genres: (details.genres || []).slice(0, 3).map(g => g.name).join(', ')
+});
+if (seq !== undefined && seq !== state.openSeq) return; // stale open — drop
+const text = String(d.text || '').trim();
+if (!text) return;
+try { localStorage.setItem('void_' + pitchCacheKey(id, type), JSON.stringify({ text, ts: Date.now() })); } catch (e) {}
+showPitch(text);
+} catch (e) { /* stays hidden — honest unavailability, no broken UI */ }
+}
+function showPitch(text) {
+const box = document.getElementById('aiPitch');
+if (!box) return;
+const t = box.querySelector('.ai-pitch-text');
+if (t) t.textContent = text; // textContent only — never HTML
+box.hidden = false;
+box.classList.add('active');
+}
+
+// A4: replies render via textContent (no HTML injection is possible), but raw
+// markdown symbols are noise in plain text — strip the common wrappers.
+// [RECOMMEND: Title (Year)] is consumed by the parser BEFORE this runs.
+function stripMarkdown(s) {
+return String(s || '')
+.replace(/```[\s\S]*?```/g, m => m.replace(/```(\w+)?\n?/g, '')) // code fences
+.replace(/!\[[^\]]*\]\([^)]*\)/g, '')            // images
+.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')         // links → text
+.replace(/^\s{0,3}#{1,6}\s+/gm, '')              // headings
+.replace(/(\*\*|__)(.*?)\1/g, '$2')              // bold
+.replace(/`([^`]+)`/g, '$1')                     // inline code
+.replace(/^\s*>\s?/gm, '')                       // quotes
+.trim();
 }
 
 // ============ EVENT DELEGATION ============
@@ -1351,6 +1592,7 @@ const ACTION_HANDLERS = {
 'retry-banner'() { initBanner(); },
 'select-genre'(el) { window.selectGenre(parseInt(el.dataset.id, 10), el.dataset.name); },
 'select-mood'(el) { window.selectMood(el.dataset.mood); },
+'shuffle-mood-row'(el) { window.shuffleMoodRow(el.dataset.key); },
 'send-ai-suggestion'(el) { document.getElementById('aiChatInput').value = el.dataset.msg; window.sendAIMessage(); },
 'toast-close'(el) { el.closest('.toast')?.remove(); },
 'reload-page'() { window.location.reload(); },
@@ -1454,6 +1696,7 @@ initScrollArrows();
 initPullToRefresh();
 initBanner();
 initMoodBar();
+initMoodRows(); // A2: curated mood rows (lazy-loaded)
 migrateMediaIds(); // V-02: normalize stored ids before anything reads them
 loadContent();
 renderWatchlist();
@@ -1744,6 +1987,7 @@ state.currentDetails = details;
 // from the modal save an accurate snapshot too.
 cacheMedia(id, type, details.title || details.name || '', details.poster_path || '', { year: (details.release_date || details.first_air_date || '').split('-')[0], rating: details.vote_average || 0 });
 displayDetails(details, type);
+loadAIPitch(id, type, details, seq); // A3: spoiler-free one-liner (cached 7d, hides on failure)
 updateSEO(details.title || details.name, details.overview, type, `${IMG}${details.poster_path}`);
 injectSchema(details, type);
 displayCast(credits.cast || []);
