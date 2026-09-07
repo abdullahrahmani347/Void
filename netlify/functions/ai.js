@@ -70,6 +70,10 @@ const SORT_ALLOWLIST = new Set([
   'primary_release_date.desc', 'primary_release_date.asc', 'revenue.desc'
 ]);
 
+// TMDB uses different genre id spaces for movies and TV — mirror the client's
+// MOVIE_TO_TV_GENRE mapping so TV discovers query the right ids.
+const TV_GENRE_IDS = { 28: 10759, 12: 10759, 14: 10765, 878: 10765 };
+
 const hits = new Map(); // ip -> [timestamps within window] (per-instance)
 
 function clientIp(event) {
@@ -204,7 +208,10 @@ function parseDiscoverJSON(raw) {
 function buildDiscoverParams(v) {
   const p = new URLSearchParams();
   const isMovie = v.media_type === 'movie';
-  if (v.genreIds && v.genreIds.length) p.set('with_genres', v.genreIds.join(','));
+  if (v.genreIds && v.genreIds.length) {
+    const ids = isMovie ? v.genreIds : v.genreIds.map(g => TV_GENRE_IDS[g] || g);
+    p.set('with_genres', ids.join(','));
+  }
   if (v.minRating) { p.set('vote_average.gte', String(v.minRating)); p.set('vote_count.gte', '50'); }
   if (v.yearFrom) p.set(isMovie ? 'primary_release_date.gte' : 'first_air_date.gte', `${v.yearFrom}-01-01`);
   if (v.yearTo) p.set(isMovie ? 'primary_release_date.lte' : 'first_air_date.lte', `${v.yearTo}-12-31`);
@@ -371,4 +378,4 @@ exports.handler = async (event) => {
 };
 
 // Test-only surface (unit-testing the parser/validator without a network).
-exports._test = { sanitizeForPrompt, parseDiscoverJSON, buildDiscoverParams };
+exports._test = { sanitizeForPrompt, parseDiscoverJSON, buildDiscoverParams, TV_GENRE_IDS };

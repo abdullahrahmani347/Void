@@ -35,7 +35,9 @@ const MediaCache = new Map();
 function cacheMedia(id, type, title, poster, extra = {}){
 const key = type + ':' + id;
 const prev = MediaCache.get(key) || {};
-MediaCache.set(key, { id, type, title: title || prev.title || '', poster: poster || prev.poster || '', year: extra.year || prev.year || '', rating: extra.rating || prev.rating || 0, genre_ids: extra.genre_ids || prev.genre_ids || [] }); // B6: genre_ids feed trending-in-your-genres
+// B6: empty arrays must not erase richer previous entries ([] is truthy).
+const gids = (extra.genre_ids && extra.genre_ids.length) ? extra.genre_ids : (prev.genre_ids || []);
+MediaCache.set(key, { id, type, title: title || prev.title || '', poster: poster || prev.poster || '', year: extra.year || prev.year || '', rating: extra.rating || prev.rating || 0, genre_ids: gids });
 }
 function getCached(id, type){ return MediaCache.get(type + ':' + id) || { id, type, title: '', poster: '', year: '', rating: 0 }; }
 // L-15: highlight runs over the RAW string and escapes each half around the
@@ -572,7 +574,6 @@ return true;
 // L-10 (superseded): the old client-side param sanitizer is gone — model
 // output is now validated SERVER-SIDE against a strict JSON schema
 // (netlify/functions/ai.js), so the client never parses model text at all.
-function detectMediaTypeFromQuery(q) { return /\b(tv|series|show|shows|episode|season|anime|sitcom)\b/i.test(q) ? 'tv' : 'movie'; }
 // A1 (Phase 2): the advanced-panel AI button now rides the same hardened
 // server action as the "Ask anything" box — one validated code path.
 document.getElementById('nlSearchBtn').addEventListener('click', () => {
@@ -1009,7 +1010,7 @@ else {
 // L-13: store the rating/year we already know at save-time — the watchlist
 // row used to fabricate 0 ratings and empty years for every entry.
 const m2 = getCached(id, type);
-list.unshift({ id, type, title, poster, addedAt: Date.now(), rating: m2.rating || 0, year: m2.year || '' });
+list.unshift({ id, type, title, poster, addedAt: Date.now(), rating: m2.rating || 0, year: m2.year || '', genre_ids: m2.genre_ids || [] });
 toast('Added to watchlist ♥', 'success');
 }
 Store.set('watchlist', list);
@@ -1052,16 +1053,18 @@ hideEmptyState('myWatchlistSection', 'myWatchlistEmpty');
 section.style.display = 'block';
 // L-13: render from the save-time snapshot (rating/year) with graceful
 // fallbacks for entries saved before this fix.
-const items = list.slice(0, 15).map(w => ({ id: w.id, media_type: w.type, title: w.title, name: w.title, poster_path: w.poster, genre_ids: [], vote_average: w.rating || 0, release_date: w.year ? `${w.year}-01-01` : '', first_air_date: w.year ? `${w.year}-01-01` : '' }));
+const items = list.slice(0, 15).map(w => ({ id: w.id, media_type: w.type, title: w.title, name: w.title, poster_path: w.poster, genre_ids: w.genre_ids || [], vote_average: w.rating || 0, release_date: w.year ? `${w.year}-01-01` : '', first_air_date: w.year ? `${w.year}-01-01` : '' }));
 renderContentRow('myWatchlist', items);
 }
 
 // ============ RECENTLY VIEWED ============
-function addRecentlyViewed(id, type, title, poster) {
+function addRecentlyViewed(id, type, title, poster, genreIds) {
 id = String(id); // V-02
 let list = Store.get('recently_viewed');
 list = list.filter(r => !(String(r.id) === id && r.type === type));
-list.unshift({ id, type, title, poster, viewedAt: Date.now() });
+// B6: genre_ids persist on the entry so trending-in-your-genres survives reloads.
+const cached = getCached(id, type);
+list.unshift({ id, type, title, poster, viewedAt: Date.now(), genre_ids: (genreIds && genreIds.length ? genreIds : cached.genre_ids) || [] });
 if (list.length > 20) list = list.slice(0, 20);
 Store.set('recently_viewed', list);
 renderRecentlyViewed();
@@ -1450,8 +1453,12 @@ const NL_DICT = [
 { re: /\b(western|cowboy)\b/i, genres: [37], label: 'western' },
 { re: /\b(sports?|football|basketball|boxing)\b/i, genres: [], label: 'sports' }
 ];
-const DECADE_RE = /\b((?:19|20)\d0)s?\b/;
+const DECADE_RE = /\b((?:19|20)\d0|\d0)s?\b/;
 
+// Module-scope helper: heuristically decides tv vs movie from the phrasing
+// (was initSearch-scoped in the pre-Phase-2 code; localNLSearch needs it).
+function detectMediaTypeFromQuery(q) { return /\b(tv|series|show|shows|episode|season|anime|sitcom)\b/i.test(q) ? 'tv' : 'movie'; }
+// Module-scope helper — localNLSearch depends on the one above.
 function localNLSearch(q) {
 const params = new URLSearchParams();
 const gids = new Set();
@@ -1466,7 +1473,13 @@ if (rule.from && (!from || rule.from < from)) from = rule.from;
 if (rule.to && (!to || rule.to > to)) to = rule.to;
 });
 const dm = q.match(DECADE_RE);
-if (dm) { const start = parseInt(dm[1], 10); from = start; to = start + 9; labels.push(dm[1] + 's'); }
+if (dm) {
+const d = dm[1];
+// "1980"/"1980s" and 2-digit forms ("80s") both resolve to a decade start;
+// 2-digit decades read as 1930s–1990s, or 2000s–2020s for 00–29.
+const start = /^\d{4}$/.test(d) ? parseInt(d, 10) : (parseInt(d, 10) >= 30 ? 1900 + parseInt(d, 10) : 2000 + parseInt(d, 10));
+from = start; to = start + 9; labels.push(start + 's');
+}
 const isTV = detectMediaTypeFromQuery(q) === 'tv';
 if (gids.size) params.set('with_genres', [...gids].slice(0, 3).join(','));
 if (rating) { params.set('vote_average.gte', String(rating)); params.set('vote_count.gte', '50'); }
@@ -1560,7 +1573,7 @@ const host = document.getElementById('moodRowsHost');
 if (!host || host.dataset.wired) return;
 host.dataset.wired = '1';
 host.innerHTML = MOOD_ROWS.map(m => `
-<section class="content-section mood-row-section" id="moodRow_${m.key}" data-mood-row="${m.key}" aria-label="${esc(m.aria)}" hidden>
+<section class="content-section mood-row-section" id="moodRow_${m.key}" data-mood-row="${m.key}" aria-label="${esc(m.aria)}">
 <div class="section-header">
 <h2 class="section-title">${esc(m.title)}</h2>
 <button class="load-more-btn mood-shuffle" data-action="shuffle-mood-row" data-key="${m.key}" aria-label="Shuffle ${esc(m.aria)} picks">⇄ SHUFFLE</button>
@@ -1571,6 +1584,10 @@ host.innerHTML = MOOD_ROWS.map(m => `
 <button class="scroll-arrow right" data-target="moodRowList_${m.key}" aria-label="Scroll right">›</button>
 </div>
 </section>`).join('');
+// Skeletons render immediately: `hidden` rows have zero geometry, so an
+// IntersectionObserver would never fire (the lazy-load deadlock). Rows only
+// collapse if their fetch comes back empty.
+MOOD_ROWS.forEach(m => renderSkeletons('moodRowList_' + m.key, 10));
 // The generic initScrollArrows() ran before these sections existed — wire
 // this row's arrows here with the same behavior.
 host.querySelectorAll('.scroll-arrow').forEach(btn => {
@@ -1595,7 +1612,6 @@ const m = MOOD_ROWS.find(x => x.key === key);
 const row = document.getElementById('moodRowList_' + key);
 const section = document.getElementById('moodRow_' + key);
 if (!m || !row || !section) return;
-if (!page) section.hidden = false;
 renderSkeletons('moodRowList_' + key, 10);
 try {
 let items = await tmdbList(`/discover/movie?${moodRowParams(m, page || 1)}`);
@@ -1606,7 +1622,8 @@ if (m.genres) loose.set('with_genres', m.genres);
 loose.set('sort_by', 'popularity.desc');
 items = await tmdbList(`/discover/movie?${loose.toString()}`);
 }
-if (!items.length) { section.hidden = true; return; }
+if (!items.length) { section.style.display = 'none'; return; }
+section.style.display = '';
 renderContentRow('moodRowList_' + key, items.map(x => ({ ...x, media_type: 'movie' })));
 } catch (e) { renderSectionError('moodRowList_' + key, () => loadMoodRow(key)); }
 }
@@ -2098,8 +2115,11 @@ function computeTopGenres(limit = 3) {
 const counts = {};
 const bump = id => { if (id) counts[id] = (counts[id] || 0) + 1; };
 const harvest = arr => (arr || []).forEach(x => {
-const c = getCached(x.id, x.type);
-(c.genre_ids || []).forEach(gid => bump(gid));
+// B6: entries persist their own genre_ids (survives reloads); the media
+// cache is the fallback for older entries.
+const cached = getCached(x.id, x.type);
+const gids = (x.genre_ids && x.genre_ids.length) ? x.genre_ids : (cached.genre_ids || []);
+gids.forEach(gid => bump(gid));
 });
 harvest(Store.get('recently_viewed'));
 harvest(Store.get('watchlist'));
@@ -2292,16 +2312,18 @@ initGenres();
 initFilters();
 initScrollArrows();
 initPullToRefresh();
-initBanner();
 initMoodBar();
 initMoodRows(); // A2: curated mood rows (lazy-loaded)
 migrateMediaIds(); // V-02: normalize stored ids before anything reads them
-loadContent();
+// Feed loading is owned by applyProfile() — every boot resolves a session
+// profile (or creates the default one), and the profile's own sources load
+// exactly once. Boot-level initBanner/loadContent here used to DOUBLE-fetch
+// and race the profile-driven load.
 renderWatchlist();
 renderRecentlyViewed();
 renderContinueWatching();
 VoidStore.subscribe('watchlist:changed', renderWatchlist);
-loadAIRecommendations();
+// loadAIRecommendations + feed loads belong to applyProfile (single owner).
     initModal();
     initMiniPlayer();
     initTheater();
@@ -2322,6 +2344,8 @@ loadAIRecommendations();
     initPWA();
     document.getElementById('dmcaLink')?.addEventListener('click', (e) => { e.preventDefault(); openOverlay(document.getElementById('dmcaModal'), 'button'); });
     document.getElementById('refreshRecsBtn')?.addEventListener('click', loadAIRecommendations);
+    // initProfiles() above resolves the session profile and applyProfile() owns
+    // the initial feed load (banner + content rows + personal views).
     const params = new URLSearchParams(window.location.search);
     if (params.get('id') && params.get('type')) openMedia(params.get('id'), params.get('type'));
     else routeFromHash();
@@ -2596,7 +2620,7 @@ displaySimilar(similar, type);
 const trailer = (videos.results || []).find(v => v.type === 'Trailer' && v.site === 'YouTube');
 state.currentTrailerKey = trailer ? trailer.key : null;
 if (type === 'tv') loadTVSeasons(id, details);
-addRecentlyViewed(id, type, details.title || details.name, details.poster_path);
+addRecentlyViewed(id, type, details.title || details.name, details.poster_path, (details.genres || []).map(g => g.id));
 initReviews();
 } catch (e) { if (seq === state.openSeq) toast('Failed to load details', 'error'); }
 }
@@ -3315,7 +3339,7 @@ return profiles.find(p => String(p.id) === String(activeId)) || null;
 function initProfiles() {
 const overlay = document.getElementById('profileOverlay');
 const profiles = Store.get('profiles', []);
-if (!profiles.length) { addDefaultProfile(); showProfileOverlay(); }
+if (!profiles.length) { addDefaultProfile(); applyProfile(Store.get('profiles', [])[0]); showProfileOverlay(); }
 else { const activeId = sessionStorage.getItem('void_active_profile_session'); if (!activeId) showProfileOverlay(); else applyProfile(profiles.find(p => String(p.id) === String(activeId)) || profiles[0]); }
 document.getElementById('manageProfilesBtn').addEventListener('click', () => { closeOverlay(overlay); openOverlay(document.getElementById('profileManagerModal'), 'button'); renderProfileManager(); });
 document.getElementById('editProfilesBtn')?.addEventListener('click', () => { toggleProfileEditMode(document.getElementById('editProfilesBtn').getAttribute('aria-pressed') !== 'true'); });
@@ -3390,6 +3414,10 @@ renderCustomLists();
 initCollections();
 loadRecommendations();
 loadAIRecommendations();
+// C2/C1: the HOME FEED itself is personal — kids profiles get their own
+// certification-capped sources, so banner + content rows must re-load too.
+initBanner();
+loadContent();
 VoidStore.publish('profile:changed', p);
 }
 // C2: kids chrome — bright theme flag, exit chip, and hiding the sections
