@@ -1,6 +1,24 @@
-// Claude proxy — the Anthropic key never reaches the browser, and this
-// sidesteps the CORS block that made direct browser calls fail.
-// Set ANTHROPIC_API_KEY in Netlify → Site settings → Environment variables.
+// Z.AI proxy — the API key never reaches the browser, and this sidesteps the
+// CORS constraints that make direct browser LLM calls impossible.
+//
+// Backend: z-ai-web-dev-sdk (zero-dependency ESM package speaking an
+// OpenAI-style /chat/completions protocol). It is declared as an
+// optionalDependency: if the package or its configuration is missing, this
+// endpoint answers 501 and EVERY client feature degrades to its documented
+// local fallback (keyword dictionary, hidden pitch) — no partial breakage.
+//
+// Configuration — the SDK reads a JSON file {baseUrl, apiKey} from, in order:
+//   1. $CWD/.z-ai-config   2. $HOME/.z-ai-config   3. /etc/.z-ai-config
+// Serverless hosts cannot ship config files, so when the environment variables
+// below are set, this function materializes them into the OS temp dir (written
+// mode 0600, cwd switched there — the SDK's first search path) before loading
+// the SDK. Never commit a .z-ai-config; env vars always win over stale files.
+//   ZAI_API_KEY   — service API key (set together with ZAI_BASE_URL)
+//   ZAI_BASE_URL  — service base URL
+//   ZAI_TOKEN     — optional X-Token header value forwarded to the service
+//
+// Netlify → Site settings → Environment variables. Local dev works with either
+// the env vars or any config file the SDK finds on its search path.
 //
 // S-02 hardening — this endpoint used to accept any POST, unthrottled, with an
 // arbitrary client-supplied system prompt, i.e. a free general-purpose LLM
@@ -26,7 +44,10 @@
 // abuse persists, a short-lived token issued by your own auth flow.
 'use strict';
 
-const MODEL = 'claude-sonnet-4-20250514';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
 const MAX_BODY_BYTES = 16 * 1024;   // 16 KB is plenty for a short chat turn
 const MAX_MESSAGES = 12;
 const MAX_MESSAGE_CHARS = 4000;
@@ -255,16 +276,71 @@ async function resolveKeywordIds(names, tmdbKey) {
   return ids;
 }
 
-async function callClaudeAPI(key, system, content, maxTokens) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: 'user', content }] })
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) return { error: res.status, detail: data };
-  const text = (data.content || []).map(c => c.text || '').join('').slice(0, MAX_TEXT_CHARS);
-  return { text };
+// ---- z-ai-web-dev-sdk loader (lazy, cached, retry-on-failure) ----
+// The SDK is ESM-only while this file is CommonJS, so it is loaded with a
+// dynamic import() — which also keeps this module loadable (and unit-testable)
+// on machines where the optional dependency is not installed. The instance is
+// cached per container; a failure resets the cache so the next request retries.
+let zaiPromise = null;
+
+function loadZAI() {
+  if (!zaiPromise) {
+    zaiPromise = (async () => {
+      const envKey = process.env.ZAI_API_KEY, envUrl = process.env.ZAI_BASE_URL;
+      if (envKey && envUrl) {
+        // Materialize env vars where the SDK looks first (cwd). Written fresh
+        // on every cold path so env changes always beat a stale file.
+        const cfg = { baseUrl: envUrl, apiKey: envKey };
+        if (process.env.ZAI_TOKEN) cfg.token = process.env.ZAI_TOKEN;
+        try {
+          const dir = os.tmpdir();
+          fs.writeFileSync(path.join(dir, '.z-ai-config'), JSON.stringify(cfg), { mode: 0o600 });
+          if (process.cwd() !== dir) process.chdir(dir);
+        } catch (e) { /* read-only fs — fall through to pre-existing configs */ }
+      }
+      const mod = await import('z-ai-web-dev-sdk');
+      return mod.default.create();
+    })();
+    zaiPromise.catch(() => { zaiPromise = null; }); // transient failures must not poison the cache
+  }
+  return zaiPromise;
+}
+
+// True when the failure means "this deployment has no usable AI backend"
+// (package absent or no config found) as opposed to "upstream hiccup".
+// The client treats any non-200 as fallback-worthy, but ops deserves the truth.
+function aiUnavailableError(e) {
+  const code = e && e.code, msg = String((e && e.message) || '');
+  return code === 'ERR_MODULE_NOT_FOUND' || /Configuration file not found|not configured/i.test(msg);
+}
+
+const LLM_TIMEOUT_MS = 25 * 1000; // serverless budgets are ~10s; dev deserves a cap too
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('LLM timeout')), ms))
+  ]);
+}
+
+function extractText(completion) {
+  const c = completion && completion.choices && completion.choices[0];
+  return String((c && c.message && c.message.content) || '').slice(0, MAX_TEXT_CHARS);
+}
+
+// Single-turn helper for the discover/pitch actions. The fixed server-side
+// persona travels as the first 'assistant' message (this backend's convention
+// for system prompts); the client can never influence it.
+async function callLLM(system, content, maxTokens) {
+  const zai = await loadZAI();
+  const completion = await withTimeout(zai.chat.completions.create({
+    messages: [
+      { role: 'assistant', content: system },
+      { role: 'user', content }
+    ],
+    thinking: { type: 'disabled' },
+    max_tokens: maxTokens
+  }), LLM_TIMEOUT_MS);
+  return extractText(completion);
 }
 
 exports.handler = async (event) => {
@@ -290,20 +366,22 @@ exports.handler = async (event) => {
   try { payload = JSON.parse(rawBody || '{}'); } catch { return json(400, { error: 'Bad JSON' }); }
   if (!payload || typeof payload !== 'object') return json(400, { error: 'Bad payload' });
 
-  const key = process.env.ANTHROPIC_API_KEY;
   const cors = origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin } : {};
 
   // ---- AI Concierge 2.0 actions (single-purpose, schema-validated) ----
   if (payload.action === 'discover') {
     const q = sanitizeForPrompt(payload.query, 200);
     if (!q || q.length < 3) return json(400, { error: 'Missing query' }, cors);
-    if (!key) return json(501, { error: 'ANTHROPIC_API_KEY not set' }, cors);
     const prompt =
       'Viewer description: "' + q + '". ' +
       'Return the JSON object describing TMDB discovery filters for it.';
-    const r = await callClaudeAPI(key, DISCOVER_SYSTEM, prompt, MAX_TOKENS.discover);
-    if (r.error) return json(r.error === 529 ? 502 : r.error, { error: 'LLM upstream error' }, cors);
-    const v = parseDiscoverJSON(r.text);
+    let text;
+    try {
+      text = await callLLM(DISCOVER_SYSTEM, prompt, MAX_TOKENS.discover);
+    } catch (e) {
+      return json(aiUnavailableError(e) ? 501 : 502, { error: 'AI unavailable — use local fallback' }, cors);
+    }
+    const v = parseDiscoverJSON(text);
     if (!v) return json(502, { error: 'Model output failed schema validation' }, cors);
     const params = buildDiscoverParams(v);
     if (v.keywords && v.keywords.length) {
@@ -330,14 +408,17 @@ exports.handler = async (event) => {
     const genres = sanitizeForPrompt(payload.genres, 60);
     const kind = payload.media_type === 'tv' ? 'TV show' : 'movie';
     if (!title) return json(400, { error: 'Missing title' }, cors);
-    if (!key) return json(501, { error: 'ANTHROPIC_API_KEY not set' }, cors);
     const prompt =
       kind + ' title: "' + title + '"' + (year ? ' (' + year + ')' : '') +
       (genres ? '. Genres: ' + genres + '.' : '') +
       ' Write the one spoiler-free sentence about why someone would enjoy it.';
-    const r = await callClaudeAPI(key, PITCH_SYSTEM, prompt, MAX_TOKENS.pitch);
-    if (r.error) return json(r.error === 529 ? 502 : r.error, { error: 'LLM upstream error' }, cors);
-    const text = (r.text || '').trim();
+    let text;
+    try {
+      text = await callLLM(PITCH_SYSTEM, prompt, MAX_TOKENS.pitch);
+    } catch (e) {
+      return json(aiUnavailableError(e) ? 501 : 502, { error: 'AI unavailable' }, cors);
+    }
+    text = text.trim();
     if (!text) return json(502, { error: 'Empty pitch' }, cors);
     return json(200, { ok: true, text }, cors);
   }
@@ -355,27 +436,22 @@ exports.handler = async (event) => {
     clean.push({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) });
   }
 
-  if (!key) return json(501, { error: 'ANTHROPIC_API_KEY not set' });
-
   // payload.system is intentionally ignored — see CONCIERGE_SYSTEM above.
-  const body = { model: MODEL, max_tokens: MAX_TOKENS.chat, system: CONCIERGE_SYSTEM, messages: clean };
-
+  // A4: hard length cap on everything the model says — a runaway reply can
+  // neither blow up the chat panel nor cost unbounded tokens.
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return json(res.status, { error: data }, cors);
-    // A4: hard length cap on everything the model says — a runaway reply can
-    // neither blow up the chat panel nor cost unbounded tokens.
-    const text = (data.content || []).map(c => c.text || '').join('').slice(0, MAX_TEXT_CHARS);
-    return json(200, { text }, cors);
+    const zai = await loadZAI();
+    const completion = await withTimeout(zai.chat.completions.create({
+      messages: [{ role: 'assistant', content: CONCIERGE_SYSTEM }, ...clean],
+      thinking: { type: 'disabled' },
+      max_tokens: MAX_TOKENS.chat
+    }), LLM_TIMEOUT_MS);
+    return json(200, { text: extractText(completion) }, cors);
   } catch (e) {
-    return json(502, { error: e.message });
+    if (aiUnavailableError(e)) return json(501, { error: 'AI not configured on this deployment' }, cors);
+    return json(502, { error: 'LLM upstream error' }, cors);
   }
 };
 
 // Test-only surface (unit-testing the parser/validator without a network).
-exports._test = { sanitizeForPrompt, parseDiscoverJSON, buildDiscoverParams, TV_GENRE_IDS };
+exports._test = { sanitizeForPrompt, parseDiscoverJSON, buildDiscoverParams, TV_GENRE_IDS, aiUnavailableError };

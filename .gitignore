@@ -1,4 +1,4 @@
-# dependencies / tooling
+# dependencies / tooling (z-ai-web-dev-sdk is the AI backend optional dep)
 node_modules/
 eslint-cache/
 
@@ -6,6 +6,7 @@ eslint-cache/
 .env
 .env.*
 !.env.example
+.z-ai-config
 
 # logs / OS junk
 *.log

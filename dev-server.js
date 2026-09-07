@@ -200,4 +200,4 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, () => console.log(`VOID dev server → http://localhost:${PORT}  (TMDB ${MOCK_TMDB ? 'MOCK fixtures' : (process.env.TMDB_API_KEY ? 'key loaded ✓' : 'key MISSING ✗')}, AI ${MOCK_AI ? 'MOCK' : (process.env.ANTHROPIC_API_KEY ? 'key loaded ✓' : 'key unset — AI features degrade')})`));
+server.listen(PORT, () => console.log(`VOID dev server → http://localhost:${PORT}  (TMDB ${MOCK_TMDB ? 'MOCK fixtures' : (process.env.TMDB_API_KEY ? 'key loaded ✓' : 'key MISSING ✗')}, AI ${MOCK_AI ? 'MOCK' : 'via z-ai-web-dev-sdk — local fallback if unavailable'})`));

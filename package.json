@@ -13,7 +13,10 @@
     "eslint-plugin-import": "^2.29.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "optionalDependencies": {
+    "z-ai-web-dev-sdk": "^0.0.18"
+  }
 }

@@ -304,7 +304,7 @@ document.getElementById('themeIcon').innerHTML = theme === 'dark'
 
 // ============ API (P1: proxied; direct fallback for dev) ============
 // P3-8: beginFetch/endFetch drive a slim top progress bar while API calls
-// are in flight (shared by TMDB + Claude so users see activity).
+// are in flight (shared by TMDB + the AI concierge so users see activity).
 let _fetchCount = 0;
 function beginFetch() {
 _fetchCount++;
@@ -358,21 +358,27 @@ throw new Error(`TMDB API error ${r.status} (${endpoint})`);
 }
 async function tmdbList(endpoint) { const d = await tmdb(endpoint); return d.results || []; }
 
-// ============ ANTHROPIC (P1: proxied) ============
-async function callClaude(messages, system = '') {
+// ============ AI CONCIERGE (P1: proxied; server runs z-ai-web-dev-sdk) ============
+// Two call shapes share one transport:
+//   callAIAction({ action: 'discover'|'pitch', ... }) → full server JSON
+//   callAI(messages, system)                          → concierge chat text
+async function callAIAction(payload) {
 beginFetch();
 try {
-const body = { messages };
-if (system) body.system = system;
 const r = await fetch('/.netlify/functions/ai', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify(body)
+body: JSON.stringify(payload)
 });
 if (!r.ok) throw new Error('AI error');
-const d = await r.json();
-return d.text || '';
+return await r.json();
 } finally { endFetch(); }
+}
+async function callAI(messages, system = '') {
+const body = { messages };
+if (system) body.system = system;
+const d = await callAIAction(body);
+return d.text || '';
 }
 
 // ============ FEATURED BANNER ============
@@ -1109,7 +1115,7 @@ const topRated = Object.entries(ratings).sort((a, b) => b[1].stars - a[1].stars)
 const recentTitles = watched.slice(0, 5).map(w => w.title);
 const genres = profile?.genres || [];
 const prompt = `You are a movie recommendation expert. Based on this user's watch history and ratings, give me a short reason (max 15 words) for why I'm recommending content to them. Recent watches: ${recentTitles.join(', ')}. Highly rated: ${topRated.join(', ')}. Preferred genres: ${genres.join(', ')}. Reply with ONLY the short reason sentence, no quotes.`;
-const reason = await callClaude([{ role: 'user', content: prompt }]);
+const reason = await callAI([{ role: 'user', content: prompt }]);
 document.getElementById('aiRecReason').textContent = '✨ ' + reason;
 const seedIds = watched.slice(0, 3).map(w => w.id);
 const promises = seedIds.map(id => { const w = watched.find(x => x.id === id); return tmdbList(`/${w?.type || 'movie'}/${id}/recommendations`); });
@@ -1384,7 +1390,7 @@ const ratings = Store.get('user_ratings', {});
 const ratedStr = Object.entries(ratings).map(([id, r]) => `${r.title}: ${r.stars}/5`).slice(0, 5).join(', ');
 const system = `You are VOID's friendly AI movie concierge. The user's recent watches: ${watched.slice(0, 5).map(w => w.title).join(', ')}. Their ratings: ${ratedStr || 'none yet'}. Be warm, specific, and concise (under 80 words). If recommending titles, list them as: [RECOMMEND: Title (year)] so we can parse them. Don't use markdown.`;
 try {
-const reply = await callClaude([...state.aiChatHistory], system);
+const reply = await callAI([...state.aiChatHistory], system);
 state.aiChatHistory.push({ role: 'assistant', content: reply });
 typing.remove();
 const matches = [...reply.matchAll(/\[RECOMMEND:\s*(.+?)\s*\((\d{4})\)\]/g)];
@@ -1513,7 +1519,7 @@ announce('Interpreting your description');
 let source = 'ai';
 let filters = null;
 try {
-const d = await callAI({ action: 'discover', query: q.slice(0, 200) });
+const d = await callAIAction({ action: 'discover', query: q.slice(0, 200) });
 if (!d || !d.ok || !d.params) throw new Error('bad ai payload');
 filters = { media_type: d.media_type === 'tv' ? 'tv' : 'movie', params: d.params, interpreted: d.interpreted || '' };
 } catch (e) {
@@ -1647,7 +1653,7 @@ let cached = null;
 try { cached = JSON.parse(localStorage.getItem('void_' + pitchCacheKey(id, type)) || 'null'); } catch (e) {}
 if (cached && cached.text && (Date.now() - cached.ts) < PITCH_TTL) { showPitch(cached.text); return; }
 try {
-const d = await callAI({
+const d = await callAIAction({
 action: 'pitch',
 media_type: type,
 title: details.title || details.name || '',

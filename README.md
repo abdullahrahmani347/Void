@@ -34,10 +34,13 @@ Open http://localhost:3000. The dev server serves static files and shims the Net
 | Variable | Where | Purpose |
 |---|---|---|
 | `TMDB_API_KEY` | Netlify env vars / local shell | TMDB metadata proxy (`netlify/functions/tmdb.js`) |
-| `ANTHROPIC_API_KEY` | Netlify env vars | AI concierge proxy (`netlify/functions/ai.js`) — optional |
+| `ZAI_API_KEY` + `ZAI_BASE_URL` | Netlify env vars | AI concierge proxy (`netlify/functions/ai.js`) — optional. Without them the endpoint answers 501 and every AI feature falls back to its local dictionary / hides itself |
+| `ZAI_TOKEN` | Netlify env vars | Optional `X-Token` forwarded to the AI service |
 | `SITE_URL` | Netlify env vars | Extra allowed origin for the AI endpoint |
 
-**Never commit API keys.** Keys belong in Netlify environment variables (or your local shell). If a key ever leaks: rotate it at the provider immediately and purge it from git history (`git filter-repo` / BFG) — a force-push alone does not invalidate cached views or forks.
+The AI backend is [`z-ai-web-dev-sdk`](https://www.npmjs.com/package/z-ai-web-dev-sdk), declared as an **optional dependency** — `npm install` picks it up automatically on Netlify. The SDK reads its `{baseUrl, apiKey}` config from `.z-ai-config` files; the function materializes the env vars into the temp dir at runtime, so no config file is ever needed or shipped.
+
+**Never commit API keys.** Keys belong in Netlify environment variables (or your local shell) — and never commit a `.z-ai-config` file (both are gitignored). If a key ever leaks: rotate it at the provider immediately and purge it from git history (`git filter-repo` / BFG) — a force-push alone does not invalidate cached views or forks.
 
 ## Deploying (Netlify)
 
