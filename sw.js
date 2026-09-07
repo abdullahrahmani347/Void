@@ -1,5 +1,9 @@
 // VOID Streaming Service Worker
 // Provides offline functionality and caching.
+// v12: cross-origin interception removed — the SW only handles same-origin
+// traffic now. The old cache-first poster branch broke every image on the
+// deployed HTTPS origin (SW fetch replays died before reaching the network)
+// while working on localhost; see the comment in the fetch handler.
 // F-01: every script the page loads is precached now — the shell used to list
 // only app.js/styles.css, so an offline reload lost the focus manager, resume
 // dialog, palette, PIN gate and the rest of the 11 feature modules. The
@@ -11,9 +15,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v11'; // v11: AI backend swap (z-ai-web-dev-sdk) + callAIAction transport fix
-const DYNAMIC_CACHE = 'void-dynamic-v9';
-const DYNAMIC_CACHE_MAX = 120;
+const CACHE = 'void-shell-v12'; // v12: SW no longer intercepts cross-origin requests (poster fix)
+const DYNAMIC_CACHE = 'void-dynamic-v10';
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
 // at the domain root AND from subpath deployments.
@@ -26,10 +29,7 @@ const SHELL = [
   './profile-pin.js', './i18n.js', './csv-import.js', './sw-register.js'
 ];
 
-// Images domain for caching
-const IMAGE_DOMAINS = [
-  'https://image.tmdb.org'
-];
+const DYNAMIC_CACHE_MAX = 120;
 
 // Install event - cache the full offline shell (P2 + F-01)
 self.addEventListener('install', (event) => {
@@ -91,6 +91,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // v12 FIX: cross-origin requests are NEVER intercepted. The old cache-first
+  // poster branch (image.tmdb.org) worked locally but on the deployed HTTPS
+  // origin the SW's fetch(event.request) replay failed instantly without
+  // reaching the network — every poster broke in production while localhost
+  // looked fine, so it shipped unnoticed. Browser-verified on the deployment:
+  // page-direct image loads are CSP-cleared (img-src) and load 56/56, so the
+  // browser now fetches them itself. Cost: posters are no longer available in
+  // the offline cache (the feed needs network data anyway).
+  if (url.origin !== location.origin) {
+    return;
+  }
+
   // P5-8: Netlify functions/APIs — network first, fall back to cached responses
   // so recently-fetched content stays available offline.
   if (url.pathname.startsWith('/.netlify/')) {
@@ -108,30 +120,6 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => caches.match('./index.html').then((hit) => hit || caches.match('./')))
     );
-    return;
-  }
-
-  // Handle cross-origin API requests with network-first caching
-  // (must come BEFORE the generic cross-origin passthrough)
-  if (url.hostname === 'api.themoviedb.org') {
-    event.respondWith(handleApiRequest(request));
-    return;
-  }
-
-  // P2: other cross-origin requests that aren't image.tmdb.org pass through unchanged
-  if (url.hostname !== 'image.tmdb.org' && url.origin !== location.origin) return;
-
-  // P2: posters (image.tmdb.org) — cache-first from DYNAMIC_CACHE
-  if (url.hostname === 'image.tmdb.org') {
-    event.respondWith(caches.open(DYNAMIC_CACHE).then(async c => {
-      const hit = await c.match(event.request);
-      if (hit) return hit;
-      try {
-        const res = await fetch(event.request);
-        if (res.ok) c.put(event.request, res.clone());
-        return res;
-      } catch (err) { return Response.error(); }
-    }));
     return;
   }
 
