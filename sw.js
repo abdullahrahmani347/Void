@@ -11,8 +11,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v10'; // v10: Phase 2 — AI concierge, discovery+, profiles+ JS/CSS/HTML
-const DYNAMIC_CACHE = 'void-dynamic-v8';
+const CACHE = 'void-shell-v11'; // v11: AI backend swap (z-ai-web-dev-sdk) + callAIAction transport fix
+const DYNAMIC_CACHE = 'void-dynamic-v9';
 const DYNAMIC_CACHE_MAX = 120;
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
@@ -113,7 +113,7 @@ self.addEventListener('fetch', (event) => {
 
   // Handle cross-origin API requests with network-first caching
   // (must come BEFORE the generic cross-origin passthrough)
-  if (url.hostname === 'api.themoviedb.org' || url.hostname === 'api.anthropic.com') {
+  if (url.hostname === 'api.themoviedb.org') {
     event.respondWith(handleApiRequest(request));
     return;
   }
