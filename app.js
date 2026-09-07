@@ -137,12 +137,61 @@ script.textContent = JSON.stringify(schema);
 }
 
 // ============ STORAGE ============
+// C1 (Phase 2): per-profile namespacing. Personal keys live under
+// "void_p<profileId>:<key>" once a profile is active; global keys (the
+// profiles list itself, PWA prefs, the storage-version marker) are untouched.
+// earlyProfileInit() resolves the active profile BEFORE any other read, and
+// migrateProfileStorage() moves pre-isolation data into the first profile's
+// namespace exactly once (boot-time version check).
+const PER_PROFILE_KEYS = new Set(['watchlist', 'recently_viewed', 'continue_watching', 'watch_diary', 'search_history', 'custom_lists', 'user_ratings']);
+let PROFILE_NS = ''; // 'p<id>:' — empty until a profile is resolved
+function profileStoreKey(key) {
+if (PROFILE_NS && (PER_PROFILE_KEYS.has(key) || key.startsWith('ep_progress_'))) return PROFILE_NS + key;
+return key;
+}
 const Store = {
-get(key, def = []) { try { return JSON.parse(localStorage.getItem('void_' + key)) ?? def; } catch { return def; } },
-set(key, val) { try { localStorage.setItem('void_' + key, JSON.stringify(val)); } catch (e) { console.warn('Storage error', e); } },
+get(key, def = []) { try { return JSON.parse(localStorage.getItem('void_' + profileStoreKey(key))) ?? def; } catch { return def; } },
+set(key, val) { try { localStorage.setItem('void_' + profileStoreKey(key), JSON.stringify(val)); } catch (e) { console.warn('Storage error', e); } },
 // A4: first visit follows the OS preference; an explicit toggle always wins.
 getTheme() { const t = localStorage.getItem('void_theme'); if (t === 'dark' || t === 'light') return t; return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
 };
+// C1: resolve the active profile before any personal Store read happens.
+function earlyProfileInit() {
+try {
+const profiles = Store.get('profiles', []);
+const activeId = Store.get('active_profile', null) || sessionStorage.getItem('void_active_profile_session');
+const p = profiles.find(x => String(x.id) === String(activeId)) || profiles[0] || null;
+if (p) { PROFILE_NS = 'p' + p.id + ':'; window.__activeProfile = p; }
+} catch (e) { console.warn('earlyProfileInit failed', e); }
+}
+// C1: one-time migration — everything saved before isolation becomes the
+// first profile's data. Guarded by a storage-version marker; raw keys are
+// removed after a successful copy.
+function migrateProfileStorage() {
+const VERSION = 2;
+let v = 0;
+try { v = JSON.parse(localStorage.getItem('void_storage_version')) || 0; } catch (e) {}
+if (v >= VERSION) return;
+const profiles = (() => { try { return JSON.parse(localStorage.getItem('void_profiles')) || []; } catch (e) { return []; } })();
+if (profiles.length) {
+const owner = 'p' + profiles[0].id + ':';
+let moved = false;
+const moveOnce = (bareKey) => {
+const from = 'void_' + bareKey, to = 'void_' + owner + bareKey;
+if (localStorage.getItem(from) === null || localStorage.getItem(to) !== null) return;
+localStorage.setItem(to, localStorage.getItem(from));
+localStorage.removeItem(from);
+moved = true;
+};
+PER_PROFILE_KEYS.forEach(moveOnce);
+for (let i = localStorage.length - 1; i >= 0; i--) {
+const k = localStorage.key(i);
+if (k && k.startsWith('void_ep_progress_')) moveOnce(k.slice(5));
+}
+if (moved) console.info('[VOID] C1 migration: pre-isolation data assigned to profile', profiles[0].id);
+}
+try { localStorage.setItem('void_storage_version', JSON.stringify(VERSION)); } catch (e) {}
+}
 
 // ============ FOCUS TRAP ============
 function trapFocus(el) {
@@ -237,6 +286,9 @@ const current = document.documentElement.getAttribute('data-theme');
 const next = current === 'dark' ? 'light' : 'dark';
 document.documentElement.setAttribute('data-theme', next);
 localStorage.setItem('void_theme', next);
+// C1: theme is per-profile — persist into the active profile when one is set.
+const prof = getCurrentProfile();
+if (prof) { const profiles = Store.get('profiles', []); const t = profiles.find(x => String(x.id) === String(prof.id)); if (t) { t.theme = next; Store.set('profiles', profiles); } }
 updateThemeIcon(next);
 syncThemeColor(next);
 VoidStore.publish('theme:changed', next);
@@ -334,7 +386,12 @@ container.innerHTML = `<div class="banner-skeleton" role="status" aria-label="Lo
     <div class="sk-btn"></div>
   </div></div>`;
 try {
-const items = await tmdbList('/trending/all/day');
+// C2: kids profiles get a certification-capped discover feed instead of raw
+// trending (trending can't be certification-filtered).
+const kids = !!(getCurrentProfile() && getCurrentProfile().kids);
+const items = await tmdbList(kids
+? '/discover/movie?certification_country=US&certification.lte=PG&include_adult=false&sort_by=popularity.desc&vote_count.gte=50'
+: '/trending/all/day');
 state.bannerItems = items.filter(i => i.backdrop_path || i.poster_path).slice(0, 6);
 if (!state.bannerItems.length) throw new Error('no banner items');
 renderBanner();
@@ -1114,6 +1171,10 @@ async function loadContent() {
 // P-02: now_playing used to be fetched twice per home load (once for the row,
 // once more for New This Week). One promise now feeds both.
 const nowPlayingPromise = tmdbList('/movie/now_playing');
+// C2: kids home feed — PG/TV-PG discover sources; non-certifiable rows stay hidden.
+const kidsMode = !!(getCurrentProfile() && getCurrentProfile().kids);
+const KIDS_MOVIE = '/discover/movie?certification_country=US&certification.lte=PG&include_adult=false&sort_by=popularity.desc&vote_count.gte=50';
+const KIDS_TV = '/discover/tv?certification_country=US&certification.lte=TV-PG&include_adult=false&sort_by=popularity.desc&vote_count.gte=20';
 const load = async (id, source, type) => {
 try {
 const items = await (typeof source === 'string' ? tmdbList(source) : source);
@@ -1122,6 +1183,16 @@ renderContentRow(id, items.map(m => ({ ...m, media_type: m.media_type || type })
 renderSectionError(id, () => load(id, typeof source === 'string' ? source : tmdbList('/movie/now_playing'), type), e && e.message);
 }
 };
+if (kidsMode) {
+// Kids: only certification-filtered sources load; the rest of the rows stay
+// hidden via applyKidsMode().
+await Promise.all([
+load('trendingMovies', KIDS_MOVIE, 'movie'),
+load('popularTV', KIDS_TV, 'tv'),
+]);
+announce('Home feed loaded');
+return;
+}
 await Promise.all([
 load('trendingMovies', '/trending/movie/week', 'movie'),
 load('popularTV', '/trending/tv/week', 'tv'),
@@ -2039,6 +2110,7 @@ return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([
 function renderTrendingInYourGenres(trendingItems) {
 const section = document.getElementById('trendingGenresSection');
 if (!section) return;
+if (getCurrentProfile() && getCurrentProfile().kids) { section.style.display = 'none'; return; } // C2: trending is not certification-filterable
 const top = computeTopGenres(3);
 if (!top.length || !trendingItems || !trendingItems.length) { section.style.display = 'none'; return; }
 const names = top.map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
@@ -2079,7 +2151,19 @@ const ACTION_HANDLERS = {
 'delete-custom-list'(el) { window.deleteCustomList(parseInt(el.dataset.id, 10)); },
 'toggle-item-in-list'(el) { window.toggleItemInList(parseInt(el.dataset.id, 10)); },
 'new-list-from-dropdown'() { document.getElementById('addToListDropdown').style.display = 'none'; openOverlay(document.getElementById('createListModal'), '#listNameInput'); },
-'select-profile'(el) { window.selectProfile(parseInt(el.dataset.id, 10)); },
+'select-profile'(el) {
+// C4: in edit mode a profile card opens its editor instead of switching.
+const ov = document.getElementById('profileOverlay');
+const id = parseInt(el.dataset.id, 10);
+if (ov && ov.classList.contains('edit-mode')) {
+closeOverlay(ov);
+openOverlay(document.getElementById('profileManagerModal'), 'button');
+window.renderProfileManager();
+window.editProfile(id);
+return;
+}
+window.selectProfile(id);
+},
 'add-profile-overlay'() { closeOverlay(document.getElementById('profileOverlay')); openOverlay(document.getElementById('profileManagerModal'), 'button'); window.renderProfileManager(); },
 'select-avatar'(el) { window.selectAvatar(el.dataset.avatar); },
 'toggle-selected'(el) { el.classList.toggle('selected'); el.setAttribute('aria-checked', el.classList.contains('selected') ? 'true' : 'false'); },
@@ -2195,6 +2279,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Register global error listeners BEFORE any init so they capture boot errors.
   try { ErrorMonitor.init(); } catch (e) { console.error('ErrorMonitor init failed', e); }
   try {
+    migrateProfileStorage(); // C1: one-time pre-isolation data move (version-checked)
+    earlyProfileInit(); // C1: resolve the active profile NS before any personal read
     initEventDelegation();
     initLiveRegions();
     initTopProgress();
@@ -3189,20 +3275,60 @@ renderCustomLists();
 }
 
 // ============ PROFILES ============
-const DEFAULT_AVATARS = ['👤', '🦁', '🐼', '🦊', '🐺', '🦋', '🌙', '⚡', '🎭', '🎬', '👑', '🔥'];
+// C3: 12 gradient geometric avatars as inline SVG — zero external assets.
+// Legacy emoji avatar values keep rendering unchanged.
+const AVATAR_PALETTE = [['#ff512f','#dd2476'],['#36d1dc','#5b86e5'],['#f7971e','#ffd200'],['#7f00ff','#e100ff'],['#11998e','#38ef7d'],['#fc466b','#3f5efb'],['#f953c6','#b91d73'],['#00c6ff','#0072ff'],['#f83600','#f9d423'],['#4776e6','#8e54e9'],['#00b09b','#96c93d'],['#ee0979','#ff6a00']];
+const AVATAR_COUNT = AVATAR_PALETTE.length;
+function buildAvatarSVG(i) {
+const [c1, c2] = AVATAR_PALETTE[i % AVATAR_PALETTE.length];
+const gid = 'av-g-' + i;
+const shapes = [
+'<circle cx="24" cy="24" r="12" fill="none" stroke="#fff" stroke-width="3" opacity="0.9"/><circle cx="24" cy="24" r="5" fill="#fff" opacity="0.9"/>',
+'<path d="M24 10 L38 34 L10 34 Z" fill="#fff" opacity="0.85"/>',
+'<rect x="14" y="14" width="20" height="20" rx="3" transform="rotate(45 24 24)" fill="#fff" opacity="0.85"/>',
+'<path d="M24 9l13 7.5v15L24 39l-13-7.5v-15z" fill="none" stroke="#fff" stroke-width="3" opacity="0.85"/>',
+'<path d="M10 30c4-8 8-8 12 0s8 8 12 0" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" opacity="0.9"/><path d="M10 20c4-8 8-8 12 0s8 8 12 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity="0.5"/>',
+'<circle cx="24" cy="24" r="13" fill="none" stroke="#fff" stroke-width="2" opacity="0.55" stroke-dasharray="6 5"/><circle cx="24" cy="24" r="7" fill="#fff" opacity="0.9"/>',
+'<rect x="12" y="12" width="10" height="10" fill="#fff" opacity="0.9"/><rect x="26" y="26" width="10" height="10" fill="#fff" opacity="0.9"/><rect x="26" y="12" width="10" height="10" fill="#fff" opacity="0.5"/><rect x="12" y="26" width="10" height="10" fill="#fff" opacity="0.5"/>',
+'<path d="M24 8l4.7 9.8L39 19.3l-7.5 7.3 1.8 10.3L24 32l-9.3 4.9 1.8-10.3L9 19.3l10.3-1.5z" fill="#fff" opacity="0.88"/>',
+'<circle cx="15" cy="15" r="7" fill="#fff" opacity="0.9"/><circle cx="33" cy="33" r="11" fill="none" stroke="#fff" stroke-width="3" opacity="0.75"/>',
+'<path d="M9 34 L24 9 L39 34 Z" fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round" opacity="0.9"/><path d="M17 34 L24 21 L31 34" fill="#fff" opacity="0.6"/>',
+'<rect x="11" y="18" width="26" height="12" rx="6" fill="#fff" opacity="0.85"/><circle cx="19" cy="24" r="2.4" fill="#333" opacity="0.6"/><circle cx="29" cy="24" r="2.4" fill="#333" opacity="0.6"/>',
+'<path d="M8 26c5-10 11-10 16 0s11 10 16 0" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" opacity="0.9"/><circle cx="24" cy="13" r="4.5" fill="#fff" opacity="0.9"/>'
+];
+return `<svg viewBox="0 0 48 48" role="img" aria-hidden="true" focusable="false"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="48" height="48" rx="12" fill="url(#${gid})"/>${shapes[i % shapes.length]}</svg>`;
+}
+// One renderer for every avatar slot (nav, cards, manager, PIN panel).
+// svg:N values render the inline SVG; anything else is a legacy emoji.
+function renderProfileAvatarHTML(value) {
+if (typeof value === 'string' && value.startsWith('svg:')) {
+const i = parseInt(value.slice(4), 10);
+if (Number.isFinite(i) && i >= 0 && i < AVATAR_COUNT) return buildAvatarSVG(i);
+}
+return esc(String(value || '👤'));
+}
 function getCurrentProfile() {
 const profiles = Store.get('profiles', []);
 const activeId = Store.get('active_profile', null);
-return profiles.find(p => p.id === activeId) || null;
+return profiles.find(p => String(p.id) === String(activeId)) || null;
 }
 function initProfiles() {
 const overlay = document.getElementById('profileOverlay');
 const profiles = Store.get('profiles', []);
 if (!profiles.length) { addDefaultProfile(); showProfileOverlay(); }
-else { const activeId = sessionStorage.getItem('void_active_profile_session'); if (!activeId) showProfileOverlay(); else applyProfile(profiles.find(p => p.id == activeId) || profiles[0]); }
+else { const activeId = sessionStorage.getItem('void_active_profile_session'); if (!activeId) showProfileOverlay(); else applyProfile(profiles.find(p => String(p.id) === String(activeId)) || profiles[0]); }
 document.getElementById('manageProfilesBtn').addEventListener('click', () => { closeOverlay(overlay); openOverlay(document.getElementById('profileManagerModal'), 'button'); renderProfileManager(); });
+document.getElementById('editProfilesBtn')?.addEventListener('click', () => { toggleProfileEditMode(document.getElementById('editProfilesBtn').getAttribute('aria-pressed') !== 'true'); });
+document.getElementById('kidsExitChip')?.addEventListener('click', showProfileOverlay); // C2: exit = switcher (PIN-gated)
 document.getElementById('saveProfileBtn').addEventListener('click', saveProfile);
 document.getElementById('cancelProfileBtn').addEventListener('click', () => { document.getElementById('profileForm').style.display = 'none'; });
+// C2: kids and mature are mutually exclusive in the form.
+const kidsToggle = document.getElementById('kidsToggle');
+const matureToggle = document.getElementById('matureToggle');
+if (kidsToggle && matureToggle) {
+kidsToggle.addEventListener('change', () => { if (kidsToggle.checked) matureToggle.checked = false; });
+matureToggle.addEventListener('change', () => { if (matureToggle.checked) kidsToggle.checked = false; });
+}
 renderAvatarPicker();
 renderProfileGenreChips();
 renderProfileManager();
@@ -3216,54 +3342,108 @@ const overlay = document.getElementById('profileOverlay');
 renderProfileGrid();
 openOverlay(overlay, '.profile-card');
 }
+// C4: edit mode on the "Who's watching?" screen — cards become edit badges.
+function toggleProfileEditMode(on) {
+const ov = document.getElementById('profileOverlay');
+ov.classList.toggle('edit-mode', on);
+const btn = document.getElementById('editProfilesBtn');
+if (btn) { btn.setAttribute('aria-pressed', on ? 'true' : 'false'); btn.textContent = on ? 'DONE' : 'EDIT PROFILES'; }
+}
 function renderProfileGrid() {
 const profiles = Store.get('profiles', []);
 const grid = document.getElementById('profileGrid');
-grid.innerHTML = profiles.map(p => `<button type="button" class="profile-card" data-action="select-profile" data-id="${p.id}" aria-label="Select profile ${esc(p.name)}"><div class="profile-card-avatar">${p.avatar}</div><div class="profile-card-name">${esc(p.name)}</div></button>`).join('') + `<button type="button" class="profile-card add-new" data-action="add-profile-overlay" aria-label="Add new profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></button>`;
+grid.innerHTML = profiles.map((p, i) => `<button type="button" class="profile-card" data-action="select-profile" data-id="${p.id}" style="--d:${i * 60}ms" aria-label="Select profile ${esc(p.name)}${p.kids ? ' (kids profile)' : ''}">
+<div class="profile-card-avatar">${renderProfileAvatarHTML(p.avatar)}${p.kids ? '<span class="profile-kids-badge" aria-hidden="true">🧸 KIDS</span>' : ''}</div>
+<div class="profile-card-name">${esc(p.name)}</div>
+<span class="profile-edit-badge" aria-hidden="true">✎</span>
+</button>`).join('') + `<button type="button" class="profile-card add-new" data-action="add-profile-overlay" style="--d:${profiles.length * 60}ms" aria-label="Add new profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></button>`;
 }
 function selectProfile(id) {
 const profiles = Store.get('profiles', []);
-const p = profiles.find(x => x.id === id);
+const p = profiles.find(x => String(x.id) === String(id));
 if (!p) return;
-Store.set('active_profile', id);
-sessionStorage.setItem('void_active_profile_session', id);
+Store.set('active_profile', p.id);
+sessionStorage.setItem('void_active_profile_session', String(p.id));
 applyProfile(p);
 closeOverlay(document.getElementById('profileOverlay'));
+toggleProfileEditMode(false);
 }
+// C1: a profile switch is a full data-context switch — namespace, theme,
+// kids chrome, and every personal view re-render from the new namespace.
 function applyProfile(p) {
-document.getElementById('navProfileAvatar').textContent = p.avatar;
+PROFILE_NS = 'p' + p.id + ':';
+window.__activeProfile = p;
+const navAvatar = document.getElementById('navProfileAvatar');
+if (navAvatar) navAvatar.innerHTML = renderProfileAvatarHTML(p.avatar);
 document.getElementById('navProfileName').textContent = p.name;
+// C1: theme is per-profile; the global void_theme stays as pre-profile fallback.
+const theme = p.theme || Store.getTheme();
+document.documentElement.setAttribute('data-theme', theme);
+updateThemeIcon(theme);
+syncThemeColor(theme);
+applyKidsMode(p); // C2
+renderWatchlist();
+renderRecentlyViewed();
+renderContinueWatching();
+renderDiary();
+renderCustomLists();
+initCollections();
+loadRecommendations();
+loadAIRecommendations();
+VoidStore.publish('profile:changed', p);
+}
+// C2: kids chrome — bright theme flag, exit chip, and hiding the sections
+// whose sources cannot be certification-filtered.
+function applyKidsMode(p) {
+const on = !!(p && p.kids);
+document.documentElement.setAttribute('data-kids', on ? 'on' : 'off');
+const chip = document.getElementById('kidsExitChip');
+if (chip) chip.hidden = !on;
+['top10Section', 'newThisWeekSection', 'nowPlayingSection', 'hiddenGemsSection', 'aiRecommendationsSection', 'recommendationsSection', 'trendingGenresSection'].forEach(id => {
+const s = document.getElementById(id);
+if (s) s.style.display = on ? 'none' : '';
+});
 }
 function renderAvatarPicker() {
-document.getElementById('avatarPicker').innerHTML = DEFAULT_AVATARS.map(a => `<button type="button" class="avatar-option" data-action="select-avatar" data-avatar="${esc(a)}" aria-label="Avatar ${a}" aria-pressed="false">${a}</button>`).join('');
+document.getElementById('avatarPicker').innerHTML = Array.from({ length: AVATAR_COUNT }, (_, i) =>
+`<button type="button" class="avatar-option avatar-svg" data-action="select-avatar" data-avatar="svg:${i}" aria-label="Avatar design ${i + 1}" aria-pressed="false">${buildAvatarSVG(i)}</button>`).join('');
 }
-function selectAvatar(a) { document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.textContent === a; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); }); state._selectedAvatar = a; }
+function selectAvatar(a) { document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.dataset.avatar === a; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); }); state._selectedAvatar = a; }
 function renderProfileGenreChips() {
 document.getElementById('profileGenreChips').innerHTML = ALL_GENRES.slice(0, 8).map(g => `<button type="button" class="profile-genre-chip" data-id="${g.id}" data-action="toggle-selected" role="checkbox" aria-checked="false">${g.name}</button>`).join('');
 }
 function saveProfile() {
 const name = document.getElementById('profileNameInput').value.trim();
 if (!name) { toast('Enter a profile name', 'warning'); return; }
-const avatar = state._selectedAvatar || '👤';
+const avatar = state._selectedAvatar || 'svg:0';
 const genres = [...document.querySelectorAll('.profile-genre-chip.selected')].map(el => el.textContent);
-const mature = document.getElementById('matureToggle').checked;
+const kidsToggle = document.getElementById('kidsToggle');
+const kids = !!(kidsToggle && kidsToggle.checked);
+const mature = kids ? false : document.getElementById('matureToggle').checked; // C2: mutually exclusive
 let profiles = Store.get('profiles', []);
 const editId = state._editProfileId;
-if (editId) { const p = profiles.find(x => x.id === editId); if (p) { p.name = name; p.avatar = avatar; p.genres = genres; p.mature = mature; } }
-else { profiles.push({ id: Date.now(), name, avatar, genres, mature }); }
+if (editId) { const p = profiles.find(x => String(x.id) === String(editId)); if (p) { p.name = name; p.avatar = avatar; p.genres = genres; p.mature = mature; p.kids = kids; } }
+else { profiles.push({ id: Date.now(), name, avatar, genres, mature, kids }); }
 Store.set('profiles', profiles);
+const saved = profiles.find(x => x.name === name) || profiles[profiles.length - 1];
 state._editProfileId = null;
 document.getElementById('profileNameInput').value = '';
 renderProfileManager();
 renderProfileGrid();
+// C2: kids mode is gated by the profile PIN — the SHA-256+salt dialog from
+// profile-pin.js opens immediately if the profile has none yet.
+if (kids && saved && !saved.pinHash) {
+toast('Kids mode needs a parent PIN to lock exits', 'warning');
+if (typeof window.managePin === 'function') setTimeout(() => window.managePin(saved), 400);
+}
 toast('Profile saved', 'success');
 }
 function renderProfileManager() {
 const profiles = Store.get('profiles', []);
 const listEl = document.getElementById('profileManagerList');
 listEl.innerHTML = profiles.map(p => `<div class="profile-manager-item" role="listitem">
-  <div class="pm-avatar">${p.avatar}</div>
-  <div class="pm-name">${esc(p.name)}</div>
+  <div class="pm-avatar">${renderProfileAvatarHTML(p.avatar)}</div>
+  <div class="pm-name">${esc(p.name)}${p.kids ? ' <span class="pm-kids-tag">KIDS</span>' : ''}</div>
   <div class="pm-actions">
     <button class="pm-btn" data-action="edit-profile" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">Edit</button>
     <button class="pm-btn" data-action="delete-profile" data-id="${p.id}" aria-label="Delete ${esc(p.name)}">Delete</button>
@@ -3283,19 +3463,29 @@ mgr.appendChild(closeBtn);
 }
 function editProfile(id) {
 const profiles = Store.get('profiles', []);
-const p = profiles.find(x => x.id === id);
+const p = profiles.find(x => String(x.id) === String(id));
 if (!p) return;
-state._editProfileId = id;
+state._editProfileId = p.id;
 document.getElementById('profileNameInput').value = p.name;
 state._selectedAvatar = p.avatar;
-document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.textContent === p.avatar; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); });
+document.querySelectorAll('.avatar-option').forEach(el => { const sel = el.dataset.avatar === p.avatar; el.classList.toggle('selected', sel); el.setAttribute('aria-pressed', sel ? 'true' : 'false'); });
+const kidsToggle = document.getElementById('kidsToggle');
+const matureToggle = document.getElementById('matureToggle');
+if (kidsToggle) kidsToggle.checked = !!p.kids;
+if (matureToggle) matureToggle.checked = !p.kids && !!p.mature;
 }
 function deleteProfile(id) {
 let profiles = Store.get('profiles', []);
 if (profiles.length <= 1) { toast("Can't delete last profile", 'warning'); return; }
 const wasActive = String(Store.get('active_profile', '')) === String(id) || String(sessionStorage.getItem('void_active_profile_session') || '') === String(id);
-profiles = profiles.filter(p => p.id !== id);
+profiles = profiles.filter(p => String(p.id) !== String(id));
 Store.set('profiles', profiles);
+// C1: the deleted profile's namespaced personal data is removed too.
+const deadPrefix = 'void_p' + id + ':';
+for (let i = localStorage.length - 1; i >= 0; i--) {
+const k = localStorage.key(i);
+if (k && k.startsWith(deadPrefix)) localStorage.removeItem(k);
+}
 if (wasActive) {
 // L-08: deleting the ACTIVE profile used to leave a dangling pointer —
 // getCurrentProfile() returned null (AI personalization silently off) and

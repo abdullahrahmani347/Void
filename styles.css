@@ -1297,3 +1297,71 @@ backdrop-filter:blur(20px)
 .similar-suggest-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0; }
 .similar-suggest-item img { width: 30px; height: 45px; object-fit: cover; border-radius: 4px; background: #1a1a1a; }
 .similar-suggest-item .ss-title { flex: 1; min-width: 0; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* =====================================================================
+   PHASE 2 — WORKSTREAM C: PROFILES+
+   ===================================================================== */
+/* C4: animated profile switcher — staggered pop-in, hover lift */
+.profile-overlay.active .profile-card { animation: profile-pop 0.38s cubic-bezier(0.34, 1.4, 0.64, 1) both; animation-delay: var(--d, 0ms); }
+@keyframes profile-pop { from { opacity: 0; transform: scale(0.6) translateY(14px); } to { opacity: 1; transform: none; } }
+.profile-card { position: relative; transition: transform var(--transition), border-color var(--transition); }
+.profile-card:hover, .profile-card:focus-visible { transform: translateY(-4px) scale(1.04); outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  .profile-overlay.active .profile-card { animation: none; }
+  .profile-card:hover, .profile-card:focus-visible { transform: none; }
+}
+/* C4: edit mode — cards show an edit badge; clicking opens the editor */
+.profile-edit-badge {
+  position: absolute; top: 6px; right: 6px; width: 26px; height: 26px;
+  display: none; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; border-radius: 50%;
+  font-size: 0.85rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.profile-overlay.edit-mode .profile-edit-badge { display: flex; }
+.profile-overlay.edit-mode .profile-card::after {
+  content: ''; position: absolute; inset: -4px; border-radius: var(--radius-full);
+  border: 2px dashed var(--accent); pointer-events: none;
+}
+.profile-overlay-actions { display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; }
+/* C3: SVG avatars fill their slots (picker, cards, manager, nav) */
+.avatar-svg svg { width: 100%; height: 100%; border-radius: inherit; display: block; }
+.profile-card-avatar .avatar-svg, .pm-avatar .avatar-svg, .pin-avatar .avatar-svg { display: block; width: 100%; height: 100%; border-radius: inherit; }
+.profile-card-avatar { display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+.pm-avatar { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.profile-kids-badge {
+  position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+  font-size: 0.58rem; font-weight: 700; letter-spacing: 0.04em;
+  background: linear-gradient(135deg, #ffb300, #ff8f00); color: #3e2723;
+  border-radius: var(--radius-full); padding: 0.1rem 0.45rem; white-space: nowrap;
+}
+.pm-kids-tag { font-size: 0.62rem; font-weight: 700; color: #ff8f00; letter-spacing: 0.05em; }
+/* C2: kids-mode exit chip */
+.kids-exit-chip {
+  position: fixed; left: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); z-index: var(--z-floating);
+  border: none; cursor: pointer;
+  background: linear-gradient(135deg, #ffb300, #ff8f00); color: #3e2723;
+  font-family: var(--font-body); font-weight: 700; font-size: 0.78rem;
+  padding: 0.55rem 0.9rem; border-radius: var(--radius-full);
+  box-shadow: 0 6px 18px rgba(255, 143, 0, 0.4);
+  min-height: 40px;
+}
+.kids-exit-chip:hover, .kids-exit-chip:focus-visible { filter: brightness(1.05); outline: none; }
+@media (max-width: 767px) { .kids-exit-chip { bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }
+/* C2: simplified bright kids theme — data-kids="on" on <html> */
+[data-kids="on"] body {
+  background: linear-gradient(180deg, #fff9ef 0%, #ffeecd 55%, #fff6e3 100%);
+}
+[data-kids="on"] {
+  --bg-card: rgba(255, 143, 0, 0.07);
+  --bg-card-hover: rgba(255, 143, 0, 0.14);
+  --border-card: rgba(255, 143, 0, 0.25);
+  --radius: 16px;
+}
+[data-kids="on"] .navbar.scrolled { background: rgba(255, 249, 239, 0.92); }
+[data-kids="on"] .section-title { color: #5d4037; }
+[data-kids="on"] .text-primary, [data-kids="on"] body { color: #4e342e; }
+[data-kids="on"] .content-card { border-radius: 16px; box-shadow: 0 6px 16px rgba(255, 143, 0, 0.18); }
+[data-kids="on"] .card-title { font-weight: 700; }
+/* C1: deleted-profile cleanup and namespace switches happen in JS; nothing
+   to style — the block below keeps the manager list tidy for kids tags. */
+.profile-manager-item .pm-name { display: flex; align-items: center; gap: 0.4rem; }

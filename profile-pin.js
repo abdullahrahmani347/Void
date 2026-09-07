@@ -1,6 +1,13 @@
-/* profile-pin.js — P3
+/* profile-pin.js — P3 + Phase 2 C2
    1) Enforces the per-profile "mature" toggle across every TMDB call.
-   2) Adds optional 4-digit PINs: prompt on profile select, manage from the profile manager.
+   2) C2: enforces kids-mode safety params on every discover call
+      (certification_country=US + certification.lte=PG for movies, TV-PG for
+      series) and keeps include_adult=false — kids profiles can never flip it.
+   3) C2: kids-mode EXIT gate — switching away from a kids profile requires
+      that profile's PIN (same SHA-256+salt gate as entry).
+   4) Adds optional 4-digit PINs: prompt on profile select, manage from the
+      profile manager (also exported as window.managePin so the kids-mode
+      setup flow in app.js can open it).
 
    S-06: PINs are no longer stored in plaintext — each profile keeps only a
    per-profile random salt + SHA-256 digest (crypto.subtle; FNV-1a fallback in
@@ -11,13 +18,20 @@
 (function () {
   'use strict';
 
-  // ---- Mature enforcement: normalize include_adult on every request ----
+  // ---- Mature + kids enforcement: normalize params on every request ----
   const origTmdb = window.tmdb;
   window.tmdb = function (endpoint) {
     const p = getCurrentProfile();
-    const allow = !!(p && p.mature);
+    const kids = !!(p && p.kids);
+    const allow = !!(p && p.mature) && !kids; // C2: kids can never enable adult content
     endpoint = endpoint.replace(/([?&])include_adult=[^&]*/g, '$1include_adult=' + (allow ? 'true' : 'false'));
     if (!/[?&]include_adult=/.test(endpoint)) endpoint += (endpoint.includes('?') ? '&' : '?') + 'include_adult=' + (allow ? 'true' : 'false');
+    // C2: certification caps on discover endpoints (search/multi doesn't
+    // support certification; include_adult=false above is the search gate).
+    if (kids && /\/discover\/(movie|tv)/.test(endpoint) && !/[?&]certification_country=/.test(endpoint)) {
+      const cap = /\/discover\/tv/.test(endpoint) ? 'TV-PG' : 'PG';
+      endpoint += '&certification_country=US&certification.lte=' + cap;
+    }
     return origTmdb.call(this, endpoint);
   };
 
@@ -78,20 +92,34 @@
     } catch (e) { /* non-fatal: legacy data stays until next load */ }
   })();
 
-  // ---- PIN prompt on profile select ----
+  // ---- PIN prompt on profile select (with C2 kids EXIT gate) ----
   const origSelect = window.selectProfile;
   window.selectProfile = function (id) {
-    const p = Store.get('profiles', []).find(x => x.id === id);
-    if (hasPin(p)) promptPin(p, () => origSelect.call(this, id));
+    const target = Store.get('profiles', []).find(x => String(x.id) === String(id));
+    const current = getCurrentProfile();
+    // C2: leaving a kids profile requires THAT profile's PIN first.
+    if (current && current.kids) {
+      const fresh = Store.get('profiles', []).find(x => String(x.id) === String(current.id));
+      if (fresh && fresh.pinHash && String(current.id) !== String(id)) {
+        promptPin(fresh, () => selectAfterKidsExit(id));
+        return;
+      }
+    }
+    if (hasPin(target)) promptPin(target, () => origSelect.call(this, id));
     else origSelect.apply(this, arguments);
   };
+  function selectAfterKidsExit(id) {
+    const target = Store.get('profiles', []).find(x => String(x.id) === String(id));
+    if (hasPin(target)) promptPin(target, () => origSelect.call(window, id));
+    else origSelect.call(window, id);
+  }
 
   function promptPin(profile, onOk) {
     const el = document.createElement('div');
     el.className = 'pin-overlay active';
     el.innerHTML = `
       <div class="pin-panel" role="dialog" aria-modal="true" aria-label="Enter PIN">
-        <div class="pin-avatar">${profile.avatar}</div>
+        <div class="pin-avatar">${window.renderProfileAvatarHTML ? window.renderProfileAvatarHTML(profile.avatar) : esc(profile.avatar)}</div>
         <h3 class="pin-title">${esc(profile.name)}</h3>
         <p class="pin-sub">This profile is PIN-protected</p>
         <input id="pinEntry" class="pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">
@@ -142,7 +170,7 @@
     el.className = 'pin-overlay active';
     el.innerHTML = `
       <div class="pin-panel" role="dialog" aria-modal="true" aria-label="Set PIN">
-        <div class="pin-avatar">${profile.avatar}</div>
+        <div class="pin-avatar">${window.renderProfileAvatarHTML ? window.renderProfileAvatarHTML(profile.avatar) : esc(profile.avatar)}</div>
         <h3 class="pin-title">PIN for ${esc(profile.name)}</h3>
         <p class="pin-sub">${protectedProfile
           ? 'Enter the current PIN, then a new 4-digit one (leave the new one blank to remove the PIN)'
@@ -185,4 +213,8 @@
     el.querySelector('#pinSetCancel').onclick = close;
     el.addEventListener('click', e => { if (e.target === el) close(); });
   }
+
+  // C2: app.js's kids-mode setup opens this dialog right after enabling kids
+  // mode on a profile without a PIN.
+  window.managePin = managePin;
 })();

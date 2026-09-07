@@ -46,7 +46,11 @@
         <div class="profile-selector">
             <h2 class="profile-selector-title">Who's watching?</h2>
             <div class="profile-grid" id="profileGrid"></div>
-            <button class="btn btn-outline btn-sm profile-manage-btn" id="manageProfilesBtn">MANAGE PROFILES</button>
+            <div class="profile-overlay-actions">
+                <button class="btn btn-outline btn-sm profile-manage-btn" id="manageProfilesBtn">MANAGE PROFILES</button>
+                <!-- C4: edit mode — cards become edit shortcuts instead of switching -->
+                <button class="btn btn-outline btn-sm profile-manage-btn" id="editProfilesBtn" aria-pressed="false">EDIT PROFILES</button>
+            </div>
         </div>
     </div>
 
@@ -834,6 +838,12 @@
                 </div>
                 <div class="profile-mature-toggle">
                     <label class="toggle-label">
+                        <input type="checkbox" id="kidsToggle" aria-label="Kids mode">
+                        <span>🧸 Kids mode (PG-and-under feed, PIN-gated exit)</span>
+                    </label>
+                </div>
+                <div class="profile-mature-toggle">
+                    <label class="toggle-label">
                         <input type="checkbox" id="matureToggle" aria-label="Include mature content">
                         <span>Include mature content</span>
                     </label>
@@ -899,6 +909,9 @@
             <span>Profile</span>
         </button>
     </nav>
+
+    <!-- C2: kids-mode exit chip — opens the switcher, which PIN-gates the exit -->
+    <button type="button" class="kids-exit-chip" id="kidsExitChip" hidden>🧸 KIDS MODE · SWITCH PROFILE</button>
 
     <!-- B1: mood shuffle FAB — random pick matching a random mood matrix -->
     <button type="button" class="mood-fab" id="moodFab" aria-label="Surprise pick for my mood" title="Mood shuffle">
