@@ -20,7 +20,7 @@ const ROOT = __dirname;
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' };
 
 // Header-based CSP — keep byte-for-byte in sync with netlify.toml (S-07).
-const CSP = "default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; font-src https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://api.themoviedb.org; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
+const CSP = "default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; font-src https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://api.themoviedb.org https://image.tmdb.org; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
 
 // Load the real Netlify handlers so dev matches production behavior.
 let tmdbHandler = null, aiHandler = null;

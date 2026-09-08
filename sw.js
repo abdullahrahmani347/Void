@@ -15,8 +15,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v12'; // v12: SW no longer intercepts cross-origin requests (poster fix)
-const DYNAMIC_CACHE = 'void-dynamic-v10';
+const CACHE = 'void-shell-v13'; // v13: CSP allows image.tmdb.org via connect-src; AI transport dedup
+const DYNAMIC_CACHE = 'void-dynamic-v11';
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
 // at the domain root AND from subpath deployments.

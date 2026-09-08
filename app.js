@@ -370,8 +370,9 @@ method: 'POST',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify(payload)
 });
-if (!r.ok) throw new Error('AI error');
-return await r.json();
+const d = await r.json().catch(() => null);
+if (!r.ok || !d) { const err = new Error(d && d.error ? String(d.error) : 'AI error'); err.status = r.status; throw err; }
+return d;
 } finally { endFetch(); }
 }
 async function callAI(messages, system = '') {
@@ -1421,19 +1422,9 @@ addAIMessage('ai', "Sorry, I couldn't connect right now. Try again in a moment."
 // The server owns the key, the prompts and output validation. Every failure
 // here is a signal for the caller to fall back to its non-AI path — core
 // browsing NEVER depends on this endpoint being up.
-async function callAI(payload) {
-beginFetch();
-try {
-const r = await fetch('/.netlify/functions/ai', {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify(payload)
-});
-const d = await r.json().catch(() => null);
-if (!r.ok || !d) { const err = new Error(d && d.error ? String(d.error) : 'AI error'); err.status = r.status; throw err; }
-return d;
-} finally { endFetch(); }
-}
+// NOTE: there used to be a second `callAI(payload)` transport here — it silently
+// shadowed the wrapper above (last declaration wins) and broke both AI call
+// sites with HTTP 400. The single transport is callAIAction() at the top.
 
 // A1 fallback: curated local keyword → TMDB-filter dictionary. When the LLM
 // is unavailable (no key, 501, rate limit, offline) the "Ask anything" box
