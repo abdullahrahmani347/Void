@@ -1365,3 +1365,16 @@ backdrop-filter:blur(20px)
 /* C1: deleted-profile cleanup and namespace switches happen in JS; nothing
    to style — the block below keeps the manager list tidy for kids tags. */
 .profile-manager-item .pm-name { display: flex; align-items: center; gap: 0.4rem; }
+
+/* ============ A1/A3: settings panel, diagnostics, cached badge ============ */
+.settings-body{max-height:56vh;overflow-y:auto;padding-right:.5rem;display:flex;flex-direction:column;gap:1.25rem}
+.settings-section h3{font-family:var(--font-display);font-size:var(--fs-md);letter-spacing:.06em;margin:0 0 .35rem;color:var(--text-primary)}
+.settings-hint{font-size:var(--fs-xs);color:var(--text-muted);margin:.15rem 0 .6rem;line-height:1.45}
+.settings-row{display:flex;flex-wrap:wrap;gap:.5rem}
+.diag-list{max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-raised);padding:.5rem;font-family:var(--font-mono);font-size:.72rem;color:var(--text-secondary);display:flex;flex-direction:column;gap:.35rem}
+.diag-item{border-bottom:1px dashed var(--border);padding-bottom:.3rem}
+.diag-item:last-child{border-bottom:none}
+.diag-type{color:var(--accent);font-weight:700}
+.diag-empty{color:var(--text-muted);font-style:italic}
+.cached-badge{position:fixed;top:38px;left:50%;transform:translateX(-50%);z-index:var(--z-toast);background:var(--bg-raised);border:1px solid var(--accent-gold);color:var(--text-primary);padding:.4rem 1rem;border-radius:var(--radius);font-size:var(--fs-xs);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+@media (max-width:640px){.cached-badge{top:32px;white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis}}

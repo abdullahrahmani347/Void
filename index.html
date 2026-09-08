@@ -99,6 +99,14 @@
                     <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" />
                 </svg>
             </button>
+            <!-- A1/A3: Settings — diagnostics + data export/import -->
+            <button class="nav-icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings"
+                aria-haspopup="dialog">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+            </button>
             <button type="button" class="profile-avatar-btn" id="profileAvatarBtn" title="Switch Profile"
                 aria-label="Switch profile" aria-haspopup="dialog">
                 <span class="profile-avatar-icon" id="navProfileAvatar" aria-hidden="true">👤</span>
@@ -536,6 +544,39 @@
             </div>
         </div>
     </footer>
+
+    <!-- A1/A3: Settings Modal — diagnostics + data portability -->
+    <div class="shortcuts-overlay" id="settingsOverlay" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="shortcuts-modal" style="max-width: 640px;">
+            <h2 class="shortcuts-title" id="settingsTitle">Settings</h2>
+            <div class="settings-body">
+                <section class="settings-section" aria-labelledby="stDiagTitle">
+                    <h3 id="stDiagTitle">Diagnostics</h3>
+                    <p class="settings-hint">Last <span id="diagCount">0</span> runtime errors captured on this device.
+                        Stored locally — never sent anywhere.</p>
+                    <div class="diag-list" id="diagList" tabindex="0" role="log" aria-label="Captured errors"></div>
+                    <div class="settings-row">
+                        <button class="btn btn-ghost btn-sm" id="diagCopyBtn" type="button">Copy report</button>
+                        <button class="btn btn-ghost btn-sm" id="diagDownloadBtn" type="button">Download report</button>
+                        <button class="btn btn-ghost btn-sm" id="diagClearBtn" type="button">Clear log</button>
+                    </div>
+                </section>
+                <section class="settings-section" aria-labelledby="stDataTitle">
+                    <h3 id="stDataTitle">Your data</h3>
+                    <p class="settings-hint">Export everything VOID stores on this device (all profiles) as a single
+                        JSON file, or restore from a previous export.</p>
+                    <div class="settings-row">
+                        <button class="btn btn-ghost btn-sm" id="exportDataBtn" type="button">Export data</button>
+                        <button class="btn btn-ghost btn-sm" id="importDataBtn" type="button">Import data</button>
+                        <input type="file" id="importDataFile" accept="application/json,.json" hidden>
+                    </div>
+                    <p class="settings-hint" id="storageUsage"></p>
+                </section>
+            </div>
+            <button class="btn btn-primary btn-sm" style="margin-top: 1.25rem; width: 100%;"
+                data-action="close-settings">CLOSE</button>
+        </div>
+    </div>
 
     <!-- DMCA Modal -->
     <div class="shortcuts-overlay" id="dmcaModal" role="dialog" aria-modal="true" aria-labelledby="dmcaTitle">

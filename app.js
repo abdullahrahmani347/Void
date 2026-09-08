@@ -153,7 +153,25 @@ return key;
 }
 const Store = {
 get(key, def = []) { try { return JSON.parse(localStorage.getItem('void_' + profileStoreKey(key))) ?? def; } catch { return def; } },
-set(key, val) { try { localStorage.setItem('void_' + profileStoreKey(key), JSON.stringify(val)); } catch (e) { console.warn('Storage error', e); } },
+// A3: quota-exceeded handling — free space by evicting CACHE-like keys only
+// (error log, offline queue, recent/search trimming), then retry the write
+// once. User data (watchlist, diary, custom lists, ratings, profiles) is
+// NEVER evicted; if space still cannot be recovered the user is told to
+// export from Settings instead of silently losing content.
+set(key, val) {
+try { localStorage.setItem('void_' + profileStoreKey(key), JSON.stringify(val)); }
+catch (e) {
+try {
+['void_error_log', 'void_offline_queue'].forEach(k => { try { localStorage.removeItem(k); } catch (e2) {} });
+const trim = (k, n) => { try { const raw = localStorage.getItem('void_' + profileStoreKey(k)); const a = JSON.parse(raw || 'null'); if (Array.isArray(a)) localStorage.setItem('void_' + profileStoreKey(k), JSON.stringify(a.slice(-n))); } catch (e2) {} };
+trim('recently_viewed', 25); trim('search_history', 10); trim('continue_watching', 10);
+localStorage.setItem('void_' + profileStoreKey(key), JSON.stringify(val));
+} catch (e2) {
+console.warn('[VOID] Storage quota exceeded — export your data from Settings.', e2);
+try { toast('Device storage is full. Export or clean up data in Settings.', 'warning'); } catch (e3) {}
+}
+}
+},
 // A4: first visit follows the OS preference; an explicit toggle always wins.
 getTheme() { const t = localStorage.getItem('void_theme'); if (t === 'dark' || t === 'light') return t; return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
 };
@@ -170,7 +188,7 @@ if (p) { PROFILE_NS = 'p' + p.id + ':'; window.__activeProfile = p; }
 // first profile's data. Guarded by a storage-version marker; raw keys are
 // removed after a successful copy.
 function migrateProfileStorage() {
-const VERSION = 2;
+const VERSION = 3;
 let v = 0;
 try { v = JSON.parse(localStorage.getItem('void_storage_version')) || 0; } catch (e) {}
 if (v >= VERSION) return;
@@ -192,6 +210,28 @@ if (k && k.startsWith('void_ep_progress_')) moveOnce(k.slice(5));
 }
 if (moved) console.info('[VOID] C1 migration: pre-isolation data assigned to profile', profiles[0].id);
 }
+// A3 (schema v3): structural normalization — idempotent, and conservative:
+// entries are dropped only when they are not the expected shape; user content
+// is never discarded for being merely old. Unbounded arrays get caps.
+try {
+PER_PROFILE_KEYS.forEach(k => {
+const val = Store.get(k, null);
+if (val === null) return;
+if (!Array.isArray(val)) { Store.set(k, []); return; }
+if (k === 'watchlist' || k === 'watch_diary') {
+// keep only object entries carrying an id
+const clean = val.filter(x => x && typeof x === 'object' && x.id !== undefined);
+if (clean.length !== val.length) Store.set(k, clean);
+}
+});
+const cl = Store.get('custom_lists', null);
+if (Array.isArray(cl)) {
+const clean = cl.filter(l => l && typeof l === 'object' && typeof l.id !== 'undefined' && typeof l.name === 'string');
+if (clean.length !== cl.length) Store.set('custom_lists', clean);
+}
+const capArr = (k, n) => { const a = Store.get(k, null); if (Array.isArray(a) && a.length > n) Store.set(k, a.slice(-n)); };
+capArr('recently_viewed', 100); capArr('search_history', 30); capArr('continue_watching', 50);
+} catch (e) { console.warn('[VOID] schema v3 normalization skipped:', e); }
 try { localStorage.setItem('void_storage_version', JSON.stringify(VERSION)); } catch (e) {}
 }
 
@@ -334,25 +374,110 @@ b.setAttribute('role', 'status');
 b.textContent = 'You are offline — showing cached content.';
 document.body.appendChild(b);
 }
+// A2: cached-data pill — SW v14 serves TMDB JSON stale-while-revalidate, so a
+// row can render from cache; surface that honestly instead of mixing fresh
+// and cached rows silently.
+if (!document.getElementById('cachedBadge')) {
+const cb = document.createElement('div');
+cb.className = 'cached-badge';
+cb.id = 'cachedBadge';
+cb.setAttribute('role', 'status');
+cb.textContent = 'Showing cached data — will refresh automatically.';
+cb.style.display = 'none';
+document.body.appendChild(cb);
+}
 if (!navigator.onLine) document.body.classList.add('offline-mode');
 window.addEventListener('offline', () => document.body.classList.add('offline-mode'));
-window.addEventListener('online', () => { document.body.classList.remove('offline-mode'); toast('Back online!', 'success'); });
+window.addEventListener('online', () => { document.body.classList.remove('offline-mode'); OfflineQueue.flush(); });
 }
+// A2: cached-data badge helpers — any stale-served response shows the pill;
+// the next fresh response hides it again.
+function markCachedData() { const b = document.getElementById('cachedBadge'); if (b) b.style.display = 'block'; }
+function markFreshData() { const b = document.getElementById('cachedBadge'); if (b) b.style.display = 'none'; }
+
+// ============ A2: SHARED FETCH TRANSPORT ============
+// Timeout + one retry with exponential backoff. Retries fire only on network
+// failures and transient upstream statuses (502/503/504) — never on 4xx.
+// GET-only semantics; POST callers (AI) keep their own explicit transports.
+async function fetchRetry(url, opts = {}, { timeoutMs = 8000, retries = 1 } = {}) {
+let lastErr = null;
+for (let attempt = 0; attempt <= retries; attempt++) {
+const ctl = new AbortController();
+const timer = setTimeout(() => ctl.abort(), timeoutMs);
+try {
+const res = await fetch(url, { ...opts, signal: ctl.signal });
+clearTimeout(timer);
+if (res.ok || ![502, 503, 504].includes(res.status) || attempt === retries) return res;
+lastErr = new Error('HTTP ' + res.status);
+} catch (e) {
+clearTimeout(timer);
+lastErr = e;
+if (attempt === retries) throw e;
+}
+await new Promise(r => setTimeout(r, 400 * Math.pow(2, attempt)));
+}
+throw lastErr;
+}
+
+// ============ A2: OFFLINE WRITE QUEUE ============
+// Network-backed writes made while offline are journaled in localStorage and
+// replayed on reconnect. Watchlist/diary/list writes are NOT queued — they are
+// offline-first localStorage operations that succeed without a network; only
+// AI concierge turns need the server. Cap: 20 entries (FIFO, oldest dropped).
+const OfflineQueue = {
+LS_KEY: 'void_offline_queue',
+items: [],
+load() { try { const a = JSON.parse(localStorage.getItem(this.LS_KEY) || '[]'); this.items = Array.isArray(a) ? a : []; } catch (e) { this.items = []; } },
+save() { try { localStorage.setItem(this.LS_KEY, JSON.stringify(this.items.slice(-20))); } catch (e) {} },
+add(entry) { this.load(); this.items.push(Object.assign({}, entry, { queuedAt: Date.now() })); this.save(); toast('Offline — saved. It will send automatically when you are back online.', 'info'); },
+async flush() {
+this.load();
+if (!navigator.onLine || !this.items.length) return;
+const pending = this.items;
+this.items = []; this.save();
+let sent = 0;
+const failed = [];
+for (const item of pending) {
+try {
+if (item.kind === 'chat') {
+const d = await callAIAction({ messages: item.messages });
+// Deliver into the (possibly still closed) chat panel with the same
+// renderer the live path uses, and keep the history alternating.
+const lastUser = [...(item.messages || [])].reverse().find(m => m && m.role === 'user');
+if (lastUser) addAIMessage('user', lastUser.content);
+addAIMessage('ai', stripMarkdown(d.text || ''));
+state.aiChatHistory.push({ role: 'assistant', content: d.text || '' });
+sent++;
+} else if (item.kind === 'aiAction') {
+await callAIAction(item.payload);
+sent++;
+} else { sent++; } // unknown kind: drop
+} catch (e) { failed.push(item); }
+}
+if (failed.length) { this.load(); this.items = this.items.concat(failed); this.save(); }
+if (sent) toast(`Back online — ${sent} queued message${sent === 1 ? '' : 's'} delivered.`, 'success');
+}
+};
 async function tmdb(endpoint) {
 beginFetch();
 try {
 // 1) Prefer the Netlify proxy (keeps the key server-side when deployed).
+// A2: goes through the shared transport (timeout + one backoff retry) and
+// reports SW-served stale cache so the UI can badge it honestly.
 try {
-const r = await fetch(`/.netlify/functions/tmdb?path=${encodeURIComponent(endpoint)}`);
+const r = await fetchRetry(`/.netlify/functions/tmdb?path=${encodeURIComponent(endpoint)}`);
 const d = await r.json().catch(() => null);
-if (r.ok && d && typeof d === 'object' && !d.error) return d;
+if (r.ok && d && typeof d === 'object' && !d.error) {
+if (r.headers.get('X-Void-Cache') === 'stale') markCachedData(); else markFreshData();
+return d;
+}
 } catch (e) { /* proxy unreachable (file://, static host, offline) — fall through */ }
 // 2) Direct TMDB call — ONLY with a locally-configured dev key (see header).
 //    Deployed sites always have the Netlify function available.
 if (!API_KEY) throw new Error('TMDB unavailable — deploy with the Netlify function, or set a dev key: localStorage.setItem("void_tmdb_key", "…")');
 const sep = endpoint.includes('?') ? '&' : '?';
-const r = await fetch(`https://api.themoviedb.org/3${endpoint}${sep}api_key=${API_KEY}`);
-if (r.ok) return r.json();
+const r = await fetchRetry(`https://api.themoviedb.org/3${endpoint}${sep}api_key=${API_KEY}`);
+if (r.ok) { markFreshData(); return r.json(); }
 throw new Error(`TMDB API error ${r.status} (${endpoint})`);
 } finally { endFetch(); }
 }
@@ -1407,6 +1532,14 @@ if (found) mediaCards.push({ id: found.id, type: found.media_type, title: found.
 addAIMessage('ai', stripMarkdown(cleanReply || reply), mediaCards); // A4: markdown stripped, textContent-rendered
 } catch (e) {
 typing.remove();
+// A2: offline turn — journal the full history (including the unanswered
+// user turn) and deliver it automatically on reconnect, BEFORE L-12 pops it.
+if (navigator.onLine === false) {
+OfflineQueue.add({ kind: 'chat', messages: [...state.aiChatHistory], system: system || '' });
+state.aiChatHistory.pop(); // L-12: keep strict user/assistant alternation
+addAIMessage('ai', 'You are offline — I will reply as soon as you are back online.');
+return;
+}
 // L-12: pop the unanswered user turn so the history keeps strict message
 // alternation instead of sending two consecutive user turns next time.
 if (state.aiChatHistory.length && state.aiChatHistory[state.aiChatHistory.length - 1].role === 'user') state.aiChatHistory.pop();
@@ -2340,6 +2473,8 @@ VoidStore.subscribe('watchlist:changed', renderWatchlist);
     initDiaryExport();
     initPWA();
     document.getElementById('dmcaLink')?.addEventListener('click', (e) => { e.preventDefault(); openOverlay(document.getElementById('dmcaModal'), 'button'); });
+    initSettingsPanel(); // A1/A3: diagnostics viewer + data export/import
+    OfflineQueue.load(); // A2: restore any offline-journaled writes
     document.getElementById('refreshRecsBtn')?.addEventListener('click', loadAIRecommendations);
     // initProfiles() above resolves the session profile and applyProfile() owns
     // the initial feed load (banner + content rows + personal views).
@@ -3674,11 +3809,15 @@ removeFromWatchlist() {}
 const ErrorMonitor = {
 errors: [],
 maxErrors: 50,
+LS_KEY: 'void_error_log',
 _initialized: false,
 init() {
 // Idempotent: safe to call from both the boot boundary and initPerformanceOptimizations().
 if (this._initialized) return;
 this._initialized = true;
+// A1: hydrate the ring buffer from the previous session — intermittent
+// errors must survive a reload to be diagnosable at all.
+try { const saved = JSON.parse(localStorage.getItem(this.LS_KEY) || '[]'); if (Array.isArray(saved)) this.errors = saved.slice(-this.maxErrors); } catch (e) {}
 window.addEventListener('error', (event) => {
 this.handleError({ message: event.message, source: event.filename, lineno: event.lineno, colno: event.colno, stack: event.error?.stack, type: 'runtime' });
 });
@@ -3688,10 +3827,30 @@ this.handleError({ message: event.reason?.message || 'Unhandled promise rejectio
 this.patchFetch();
 },
 handleError(error) {
-const errorRecord = { ...error, timestamp: Date.now(), url: window.location.href, userAgent: navigator.userAgent };
-this.errors.push(errorRecord);
-if (this.errors.length > this.maxErrors) this.errors.shift();
+// A1: bounded, serialized record — stacks are trimmed so one verbose error
+// cannot blow the quota, and the whole buffer persists to localStorage.
+const record = {
+type: String(error.type || 'error'),
+message: String(error.message || 'Unknown error'),
+source: error.source ? String(error.source).slice(0, 200) : undefined,
+lineno: error.lineno, colno: error.colno,
+stack: error.stack ? String(error.stack).slice(0, 800) : undefined,
+timestamp: Date.now(),
+url: String(window.location.href).slice(0, 300),
+userAgent: navigator.userAgent
+};
+this.errors.push(record);
+if (this.errors.length > this.maxErrors) this.errors = this.errors.slice(-this.maxErrors);
+this._persist();
 console.error('[ErrorMonitor]', error);
+},
+_persist() {
+try { localStorage.setItem(this.LS_KEY, JSON.stringify(this.errors)); }
+catch (e) {
+// Quota pressure: halve the buffer before giving up — diagnostics must
+// never be the thing that breaks the app.
+try { this.errors = this.errors.slice(-Math.ceil(this.maxErrors / 4)); localStorage.setItem(this.LS_KEY, JSON.stringify(this.errors)); } catch (e2) {}
+}
 },
 patchFetch() {
 const originalFetch = window.fetch;
@@ -3701,11 +3860,139 @@ catch (error) { ErrorMonitor.handleError({ message: `Fetch failed: ${error.messa
 };
 },
 getErrors() { return this.errors; },
-clearErrors() { this.errors = []; }
+clearErrors() { this.errors = []; try { localStorage.removeItem(this.LS_KEY); } catch (e) {} }
 };
 function initPerformanceOptimizations() {
 initLazyLoading();
 ErrorMonitor.init();
+}
+
+// ============ A1/A3: SETTINGS PANEL — diagnostics + data portability ============
+// No third-party SaaS: the report is built locally, shown locally, and only
+// leaves the device if the user explicitly copies/downloads it.
+const SCHEMA_VERSION = 3; // keep in sync with migrateProfileStorage()
+function buildDiagnosticsReport() {
+const errors = ErrorMonitor.getErrors();
+let lsBytes = 0, lsKeys = 0;
+try {
+for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); lsBytes += (k.length + (localStorage.getItem(k) || '').length) * 2; lsKeys++; }
+} catch (e) {}
+return JSON.stringify({
+app: 'VOID', report: 'diagnostics', schemaVersion: SCHEMA_VERSION,
+generatedAt: new Date().toISOString(), url: location.href,
+userAgent: navigator.userAgent, language: navigator.language,
+online: navigator.onLine, viewport: window.innerWidth + 'x' + window.innerHeight,
+localStorageKeys: lsKeys, localStorageApproxBytes: lsBytes,
+serviceWorkerControlled: !!navigator.serviceWorker || undefined,
+errorCount: errors.length,
+errors
+}, null, 2);
+}
+function renderDiagnostics() {
+const list = document.getElementById('diagList');
+const count = document.getElementById('diagCount');
+if (!list || !count) return;
+const errors = ErrorMonitor.getErrors();
+count.textContent = String(errors.length);
+list.textContent = '';
+if (!errors.length) {
+const empty = document.createElement('div');
+empty.className = 'diag-empty';
+empty.textContent = 'No errors captured. Enjoy the void.';
+list.appendChild(empty);
+return;
+}
+errors.slice().reverse().forEach(err => {
+const item = document.createElement('div');
+item.className = 'diag-item';
+const head = document.createElement('div');
+const type = document.createElement('span');
+type.className = 'diag-type';
+type.textContent = '[' + (err.type || 'error') + '] ';
+const when = document.createElement('span');
+when.textContent = new Date(err.timestamp || Date.now()).toLocaleTimeString();
+head.appendChild(type); head.appendChild(when);
+const msg = document.createElement('div');
+msg.textContent = (err.message || 'Unknown error') + (err.lineno ? ' @ line ' + err.lineno : '');
+item.appendChild(head); item.appendChild(msg);
+list.appendChild(item);
+});
+}
+function estimateStorageBytes() {
+let n = 0, keys = 0;
+try {
+for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); n += (k.length + (localStorage.getItem(k) || '').length) * 2; keys++; }
+} catch (e) {}
+return { bytes: n, keys };
+}
+function renderStorageUsage() {
+const el = document.getElementById('storageUsage');
+if (!el) return;
+const { bytes, keys } = estimateStorageBytes();
+el.textContent = 'Storage: ~' + (bytes > 1048576 ? (bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB') + ' across ' + keys + ' keys (schema v' + SCHEMA_VERSION + ').';
+}
+// A3: full Export/Import — one JSON blob covering every void_* key (all
+// profiles). Diagnostics + offline queue are device-local and excluded.
+function exportAllData() {
+try {
+const data = { app: 'VOID-export', schema: SCHEMA_VERSION, exportedAt: new Date().toISOString(), entries: [] };
+for (let i = 0; i < localStorage.length; i++) {
+const k = localStorage.key(i);
+if (!k || !k.startsWith('void_') || k === ErrorMonitor.LS_KEY || k === OfflineQueue.LS_KEY) continue;
+try { data.entries.push({ key: k, value: JSON.parse(localStorage.getItem(k)) }); } catch (e) { data.entries.push({ key: k, value: localStorage.getItem(k) }); }
+}
+const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = 'void-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+document.body.appendChild(a); a.click(); a.remove();
+setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+toast('Data exported.', 'success');
+} catch (e) { toast('Export failed: ' + e.message, 'error'); }
+}
+function importAllData(file) {
+const reader = new FileReader();
+reader.onload = () => {
+try {
+const data = JSON.parse(String(reader.result || ''));
+if (!data || data.app !== 'VOID-export' || !Array.isArray(data.entries) || !data.entries.length) throw new Error('Not a VOID export file');
+if (data.entries.length > 500) throw new Error('Export too large');
+for (const e of data.entries) { if (typeof e.key !== 'string' || !e.key.startsWith('void_')) throw new Error('Invalid entry key in export'); }
+if (!confirm('Restore ' + data.entries.length + ' entries from ' + (data.exportedAt || 'unknown date') + '? This overwrites current data on this device.')) return;
+let applied = 0;
+for (const e of data.entries) { try { localStorage.setItem(e.key, typeof e.value === 'string' ? e.value : JSON.stringify(e.value)); applied++; } catch (e2) {} }
+toast('Imported ' + applied + ' entries. Reloading…', 'success');
+setTimeout(() => location.reload(), 900);
+} catch (e) { toast('Import failed: ' + e.message, 'error'); }
+};
+reader.onerror = () => toast('Could not read that file.', 'error');
+reader.readAsText(file);
+}
+function initSettingsPanel() {
+const overlay = document.getElementById('settingsOverlay');
+const btn = document.getElementById('settingsBtn');
+if (!overlay || !btn) return;
+btn.addEventListener('click', () => { renderDiagnostics(); renderStorageUsage(); openOverlay(overlay, 'button'); });
+overlay.querySelector('[data-action="close-settings"]')?.addEventListener('click', () => closeOverlay(overlay));
+document.getElementById('diagCopyBtn')?.addEventListener('click', async () => {
+try { await navigator.clipboard.writeText(buildDiagnosticsReport()); toast('Report copied to clipboard.', 'success'); }
+catch (e) { toast('Clipboard blocked — use Download instead.', 'warning'); }
+});
+document.getElementById('diagDownloadBtn')?.addEventListener('click', () => {
+try {
+const blob = new Blob([buildDiagnosticsReport()], { type: 'application/json' });
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = 'void-diagnostics-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json';
+document.body.appendChild(a); a.click(); a.remove();
+setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+} catch (e) { toast('Download failed: ' + e.message, 'error'); }
+});
+document.getElementById('diagClearBtn')?.addEventListener('click', () => { ErrorMonitor.clearErrors(); renderDiagnostics(); toast('Error log cleared.', 'success'); });
+document.getElementById('exportDataBtn')?.addEventListener('click', exportAllData);
+const fileInput = document.getElementById('importDataFile');
+document.getElementById('importDataBtn')?.addEventListener('click', () => fileInput && fileInput.click());
+fileInput?.addEventListener('change', () => { const f = fileInput.files && fileInput.files[0]; fileInput.value = ''; if (f) importAllData(f); });
 }
 // Wrap renderContentRow with performance telemetry using a sealed decorator
 // so it can't be accidentally overwritten by other scripts.

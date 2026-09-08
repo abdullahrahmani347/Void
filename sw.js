@@ -137,36 +137,31 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(handleContentRequest(request));
 });
 
-// API caching strategy - network first, fallback to cache
+// API caching strategy — A2: stale-while-revalidate for TMDB JSON. A cached
+// copy answers instantly (badged via X-Void-Cache: stale so the page can show
+// its "cached data" pill) while the network refresh happens in the background.
+// AI traffic is POST-only and never reaches this handler, so no stale chat
+// replies can ever be served.
 async function handleApiRequest(request) {
-  try {
-    const networkResponse = await fetch(request);
-
-    if (networkResponse.ok) {
-      // Cache successful API responses
-      const cache = await caches.open(DYNAMIC_CACHE);
-      cache.put(request, networkResponse.clone());
-    }
-
-    return networkResponse;
-  } catch (error) {
-    console.log('[ServiceWorker] API fetch failed, trying cache:', error);
-
-    // Try to return cached response
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-
-    // Return offline error response
-    return new Response(JSON.stringify({
-      error: 'offline',
-      message: 'You are offline. Some features may be limited.'
-    }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' }
-    });
+  const cache = await caches.open(DYNAMIC_CACHE);
+  const cached = await cache.match(request);
+  const refresh = fetch(request)
+    .then((res) => { if (res.ok) cache.put(request, res.clone()); return res; })
+    .catch(() => null);
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    headers.set('X-Void-Cache', 'stale');
+    return new Response(cached.body, { status: cached.status, statusText: cached.statusText, headers });
   }
+  const net = await refresh;
+  if (net) return net;
+  return new Response(JSON.stringify({
+    error: 'offline',
+    message: 'You are offline. Some features may be limited.'
+  }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 // Content caching strategy - stale while revalidate
