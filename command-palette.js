@@ -57,7 +57,7 @@
   function actionHTML(a, idx) {
     return `<div class="cmd-item" role="option" data-idx="${idx}">
       <span class="cmd-item-icon" aria-hidden="true">${a.icon}</span>
-      <span class="cmd-item-text"><span class="cmd-item-label">${a.label}</span>${a.sub ? `<span class="cmd-item-sub">${a.sub}</span>` : ''}</span>
+      <span class="cmd-item-text"><span class="cmd-item-label">${esc(a.label)}</span>${a.sub ? `<span class="cmd-item-sub">${esc(a.sub)}</span>` : ''}</span>
     </div>`;
   }
   function titleHTML(t, idx) {

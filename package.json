@@ -2,11 +2,11 @@
   "name": "void-streaming",
   "version": "1.0.0",
   "private": true,
-  "description": "VOID — Netflix-style streaming catalog UI powered by TMDB. Vanilla JS, zero runtime dependencies.",
+  "description": "VOID \u2014 Netflix-style streaming catalog UI powered by TMDB. Vanilla JS, zero runtime dependencies.",
   "scripts": {
     "start": "node dev-server.js 3000",
     "lint": "eslint .",
-    "check": "node --check app.js && node --check sw.js && node --check dev-server.js && node --check netlify/functions/tmdb.js && node --check netlify/functions/ai.js"
+    "check": "node check.js"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
