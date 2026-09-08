@@ -3525,7 +3525,12 @@ if (!p) return;
 Store.set('active_profile', p.id);
 sessionStorage.setItem('void_active_profile_session', String(p.id));
 applyProfile(p);
-closeOverlay(document.getElementById('profileOverlay'));
+// C1: the gate is shown at boot without a real invoker, so give closeOverlay
+// an explicit restoration target — keyboard users land in the app, not on
+// the browser body / skip-link.
+const gate = document.getElementById('profileOverlay');
+if (gate) gate._lastFocus = document.getElementById('main-content');
+closeOverlay(gate);
 toggleProfileEditMode(false);
 }
 // C1: a profile switch is a full data-context switch — namespace, theme,

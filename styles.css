@@ -9,7 +9,7 @@ Responsive: Mobile-First (320px to 1920px+)
 :root{
 --bg-base:#030303;--bg-raised:#0a0a0a;--bg-card:rgba(255,255,255,0.03);--bg-card-hover:rgba(255,255,255,0.07);
 --border-card:rgba(255,255,255,0.07);--accent:#E3001B;--accent-hover:#ff1a2b;--accent-blue:#00C2FF;--accent-gold:#ffd700;--accent-green:#00e676;
---text-primary:#fff;--text-secondary:rgba(255,255,255,0.85);--text-muted:rgba(255,255,255,0.7);--text-on-accent:#fff;
+--text-primary:#fff;--text-secondary:rgba(255,255,255,0.85);--text-muted:rgba(255,255,255,0.7);--text-on-accent:#fff;--accent-text:#ff3b4c;
 --shadow-accent:0 8px 40px rgba(227,0,27,0.25);
 --shadow-card:0 10px 30px rgba(0,0,0,0.5);
 --font-display:'Franklin Gothic Medium','Arial Narrow',Impact,'Helvetica Neue',Arial,sans-serif;--font-body:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code','Segoe UI Mono','Roboto Mono',Consolas,Menlo,monospace;
@@ -22,7 +22,7 @@ Responsive: Mobile-First (320px to 1920px+)
 }
 [data-theme="light"]{
 --bg-base:#f5f5f7;--bg-raised:#fff;--bg-card:rgba(0,0,0,0.04);--bg-card-hover:rgba(0,0,0,0.08);
---border-card:rgba(0,0,0,0.1);--text-primary:#1a1a1a;--text-secondary:rgba(0,0,0,0.85);--text-muted:rgba(0,0,0,0.7);--text-on-accent:#fff;
+--border-card:rgba(0,0,0,0.1);--text-primary:#1a1a1a;--text-secondary:rgba(0,0,0,0.85);--text-muted:rgba(0,0,0,0.7);--text-on-accent:#fff;--accent-text:#c40017;
 }
 /* P4-6 light-mode contrast fixes */
 [data-theme="light"] .ai-chat-input,[data-theme="light"] .list-name-input,[data-theme="light"] .list-desc-input,[data-theme="light"] .share-link-input,[data-theme="light"] .profile-name-input,[data-theme="light"] .review-textarea{color:var(--text-primary)}
@@ -144,7 +144,7 @@ min-height: 48px;
 .btn-primary:hover{background:var(--accent-hover);box-shadow:var(--shadow-accent);transform:translateY(-2px)}
 .btn-outline{background:transparent;color:var(--text-primary);border:1px solid var(--border-card)}
 .btn-outline:hover{border-color:var(--accent);color:var(--accent)}
-.btn-ghost{background:none;border:none;color:var(--accent);font-size:0.85rem;cursor:pointer;padding:0.25rem 0.5rem;font-family:var(--font-body);font-weight:500}
+.btn-ghost{background:none;border:none;color:var(--accent-text);font-size:0.85rem;cursor:pointer;padding:0.25rem 0.5rem;font-family:var(--font-body);font-weight:500}
 .btn-ghost:hover{text-decoration:underline}
 .btn-sm{padding:0.5rem 1rem;font-size:var(--fs-sm); min-height: 44px; width: auto;}
 .btn .ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,0.3);transform:scale(0);animation:ripple 0.6s linear}
@@ -1409,3 +1409,5 @@ backdrop-filter:blur(20px)
    real composite cost on low-end phones. Removed; gradient placeholder now
    shows directly, .loaded becomes a visual no-op. */
 .card-poster,.top10-poster{filter:none}
+/* C3: small accent-colored text uses --accent-text (>=4.5:1 on both themes) */
+.footer-links a{color:var(--accent-text)}
