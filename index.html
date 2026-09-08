@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; font-src https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://api.themoviedb.org https://image.tmdb.org;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.themoviedb.org https://image.tmdb.org;">
     <title>VOID — Stream Anything. Fear Nothing.</title>
     <meta name="description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
     <meta name="keywords" content="movies, streaming, TV shows, watch free, VOID streaming, online movies">
@@ -24,15 +24,15 @@
     <meta property="twitter:description" content="Stream thousands of movies and TV shows — free, instant, no sign-up.">
     <meta property="twitter:image" content="/logo.svg">
 
-    <link rel="canonical" href="/">
+    <link rel="canonical" href="https://void-streams.netlify.app/">
     <link rel="manifest" href="manifest.webmanifest">
     <meta name="theme-color" content="#E3001B">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&display=swap"
-        rel="stylesheet">
+    <!-- B3: warm up the only cross-origin origins the app talks to (system
+         font stack means zero font downloads — no Google Fonts preconnect). -->
+    <link rel="preconnect" href="https://api.themoviedb.org">
+    <link rel="preconnect" href="https://image.tmdb.org">
+    <link rel="dns-prefetch" href="https://image.tmdb.org">
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -58,7 +58,7 @@
     <nav class="navbar" id="navbar" role="navigation" aria-label="Main navigation">
         <div class="nav-left">
             <a href="#" class="logo" aria-label="VOID Home">
-                <img src="logo.svg" alt="VOID" height="32" class="nav-logo-img">
+                <img src="logo.svg" alt="VOID" width="107" height="32" class="nav-logo-img">
             </a>
             <ul class="nav-links" role="list">
                 <li><a href="#movies">Movies</a></li>
@@ -108,7 +108,7 @@
                 </svg>
             </button>
             <button type="button" class="profile-avatar-btn" id="profileAvatarBtn" title="Switch Profile"
-                aria-label="Switch profile" aria-haspopup="dialog">
+                aria-haspopup="dialog">
                 <span class="profile-avatar-icon" id="navProfileAvatar" aria-hidden="true">👤</span>
                 <span class="profile-avatar-name" id="navProfileName">Guest</span>
             </button>
@@ -148,7 +148,8 @@
                     <circle cx="11" cy="11" r="8" />
                     <path d="m21 21-4.35-4.35" />
                 </svg>
-                <input type="text" class="search-input" id="searchInput"
+                <input type="text" class="search-input" id="searchInput" role="combobox"
+                    aria-autocomplete="list"
                     placeholder="Search or describe what you want… (press /)" autocomplete="off"
                     aria-label="Search movies and shows" aria-expanded="false" aria-haspopup="listbox"
                     aria-controls="searchResults">
@@ -492,8 +493,7 @@
         <section class="content-section" id="collectionsSection" aria-label="Collections">
             <div class="section-header">
                 <h2 class="section-title">MY COLLECTIONS</h2>
-                <button class="btn btn-outline btn-sm" id="createListBtn" aria-label="Create new collection">+ NEW
-                    LIST</button>
+                <button class="btn btn-outline btn-sm" id="createListBtn">+ NEW LIST</button>
             </div>
             <div class="collections-grid" id="collectionsGrid"></div>
             <div id="customListsContainer"></div>
@@ -531,7 +531,7 @@
     <footer class="footer" role="contentinfo">
         <div class="footer-content">
             <div class="footer-logo">
-                <img src="logo.svg" alt="VOID" height="24" class="footer-logo-img">
+                <img src="logo.svg" alt="VOID" width="80" height="24" class="footer-logo-img">
             </div>
             <p class="footer-text">Stream anything. Fear nothing. Powered by TMDB.</p>
             <div class="footer-links">

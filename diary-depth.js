@@ -67,7 +67,7 @@
             <span class="depth-chip-label">${lab}</span>
           </div>`).join('')}
       </div>
-      <div class="depth-badges" aria-label="Achievements">
+      <div class="depth-badges" role="group" aria-label="Achievements">
         ${BADGES.map(b => `
           <div class="depth-badge ${b.test(stats) ? 'earned' : 'locked'}" title="${b.label}">
             <span class="depth-badge-icon" aria-hidden="true">${b.icon}</span>

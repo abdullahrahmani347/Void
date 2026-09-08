@@ -9,6 +9,8 @@
 const API_KEY = (() => { try { return localStorage.getItem('void_tmdb_key') || ''; } catch (e) { return ''; } })();
 const IMG = 'https://image.tmdb.org/t/p/w342';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
+const IMG_MD = 'https://image.tmdb.org/t/p/w500';  // B2: mid-tier srcset rung
+const IMG_XL = 'https://image.tmdb.org/t/p/w780';  // B2: 2x-DPR rung for large cards
 const IMG_LG = 'https://image.tmdb.org/t/p/w1280';
 const IMG_FACE = 'https://image.tmdb.org/t/p/w185';
 const VIDKING = 'https://www.vidking.net/embed';
@@ -940,9 +942,11 @@ const t = esc(title);
 const rating = item.vote_average ? item.vote_average.toFixed(1) : 'N/A';
 const poster = item.poster_path ? `${IMG}${item.poster_path}` : '';
 const posterSm = item.poster_path ? `${IMG_SM}${item.poster_path}` : '';
+const posterMd = item.poster_path ? `${IMG_MD}${item.poster_path}` : '';
+const posterXl = item.poster_path ? `${IMG_XL}${item.poster_path}` : '';
 const mediaKind = type === 'movie' ? 'movie' : 'TV show';
 if (opts.top10) {
-return `<button type="button" class="top10-card" style="--d:${opts.d || 0}ms" aria-label="#${opts.rank} ${t} — ${mediaKind}" data-action="open-media" data-id="${id}" data-type="${type}">
+return `<button type="button" class="top10-card" style="--d:${opts.d || 0}ms" aria-label="#${opts.rank} ${t} ${rating} ★ — ${mediaKind}" data-action="open-media" data-id="${id}" data-type="${type}">
   <div class="top10-number" aria-hidden="true">${opts.rank}</div>
   <img class="top10-poster" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 130 195'%3E%3Crect fill='%231a1a1a' width='130' height='195'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="130px" alt="${t} — ${mediaKind} poster" loading="lazy">
   <div class="top10-info"><div class="top10-title">${t}</div><div class="top10-meta">${item.vote_average ? item.vote_average.toFixed(1) + ' ★' : ''}</div></div>
@@ -955,8 +959,8 @@ const cw = continueW.find(w => String(w.id) === String(id) && w.type === type); 
 const progress = cw ? cw.progress : (item.progress || 0);
 const genres = (item.genre_ids || []).slice(0, 2).map(gid => GENRES[gid] || TV_GENRES[gid] || '').filter(Boolean);
 return `<div class="card-wrap" style="--d:${opts.d || 0}ms">
-<button type="button" class="content-card" aria-label="${t} — ${mediaKind}, ${year}, rated ${rating} out of 10" data-action="open-media" data-id="${id}" data-type="${type}">
-<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w" sizes="(max-width: 600px) 185px, 342px" alt="${t} — ${mediaKind} poster, ${year}" class="card-poster" loading="lazy">
+<button type="button" class="content-card" aria-label="${rating} ★ ${t} — ${mediaKind}, ${year}" data-action="open-media" data-id="${id}" data-type="${type}">
+<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 185 278'%3E%3Crect fill='%231a1a1a' width='185' height='278'/%3E%3C/svg%3E" data-src="${esc(poster)}" data-srcset="${esc(posterSm)} 185w, ${esc(poster)} 342w, ${esc(posterMd)} 500w, ${esc(posterXl)} 780w" sizes="(max-width: 600px) 185px, 342px" alt="${t} — ${mediaKind} poster, ${year}" class="card-poster" loading="lazy" decoding="async">
 ${item._isNew ? '<span class="new-badge" aria-hidden="true">NEW</span>' : ''}
 <div class="rating-badge" aria-hidden="true">${rating} ★</div>
 <div class="card-overlay" aria-hidden="true">
@@ -1422,7 +1426,7 @@ const date = new Date(); date.setDate(date.getDate() - d);
 const key = date.toISOString().split('T')[0];
 const count = heatData[key] || 0;
 const heat = count === 0 ? '' : count === 1 ? 'heat-1' : count === 2 ? 'heat-2' : count === 3 ? 'heat-3' : 'heat-4';
-cells.push(`<div class="heatmap-cell ${heat}" title="${key}: ${count} watched" aria-label="${count} watched on ${key}"></div>`);
+cells.push(`<div class="heatmap-cell ${heat}" role="img" title="${key}: ${count} watched" aria-label="${count} watched on ${key}"></div>`);
 }
 heatmapEl.innerHTML = `<div class="heatmap-label">Watch activity (last 12 weeks)</div><div class="heatmap-grid">${cells.join('')}</div>`;
 entriesEl.innerHTML = diary.slice(0, 30).map(e => `<div class="diary-entry">
@@ -3512,7 +3516,7 @@ grid.innerHTML = profiles.map((p, i) => `<button type="button" class="profile-ca
 <div class="profile-card-avatar">${renderProfileAvatarHTML(p.avatar)}${p.kids ? '<span class="profile-kids-badge" aria-hidden="true">🧸 KIDS</span>' : ''}</div>
 <div class="profile-card-name">${esc(p.name)}</div>
 <span class="profile-edit-badge" aria-hidden="true">✎</span>
-</button>`).join('') + `<button type="button" class="profile-card add-new" data-action="add-profile-overlay" style="--d:${profiles.length * 60}ms" aria-label="Add new profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></button>`;
+</button>`).join('') + `<button type="button" class="profile-card add-new" data-action="add-profile-overlay" style="--d:${profiles.length * 60}ms" aria-label="Add Profile"><div class="profile-card-avatar">+</div><div class="profile-card-name">Add Profile</div></button>`;
 }
 function selectProfile(id) {
 const profiles = Store.get('profiles', []);

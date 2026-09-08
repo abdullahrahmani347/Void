@@ -14,13 +14,14 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const PORT = parseInt(process.argv[2], 10) || 8471;
 const ROOT = __dirname;
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' };
 
 // Header-based CSP — keep byte-for-byte in sync with netlify.toml (S-07).
-const CSP = "default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; font-src https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://api.themoviedb.org https://image.tmdb.org; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
+const CSP = "default-src 'self'; script-src 'self'; frame-src https://www.youtube.com https://www.vidking.net; img-src 'self' data: https://image.tmdb.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.themoviedb.org https://image.tmdb.org; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
 
 // Load the real Netlify handlers so dev matches production behavior.
 let tmdbHandler = null, aiHandler = null;
@@ -190,11 +191,31 @@ const server = http.createServer(async (req, res) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     const ext = path.extname(file);
     const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-    if (ext === '.html') headers['Content-Security-Policy'] = CSP; // S-07 parity
+    // D1 parity: netlify.toml applies this header set to /* — the dev server
+    // used to send CSP on HTML only. Match production exactly.
+    headers['Content-Security-Policy'] = CSP;
+    headers['X-Content-Type-Options'] = 'nosniff';
+    headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
+    headers['X-Frame-Options'] = 'SAMEORIGIN';
     // no-cache: without validators, Chromium's heuristic caching kept serving
     // STALE scripts after edits (a reload wasn't enough). Dev must always
     // revalidate; production caching is controlled by the host/CDN.
     headers['Cache-Control'] = 'no-cache';
+    // B1 parity: the production CDN compresses text responses — dev must too,
+    // otherwise perf testing over throttled 4G measures 3x the real bytes.
+    const enc = String(req.headers['accept-encoding'] || '');
+    const compressible = /^(text\/|application\/(javascript|json|manifest\+json))/.test(headers['Content-Type']);
+    if (/\bgzip\b/.test(enc) && compressible && buf.length > 1024) {
+      zlib.gzip(buf, (e, z) => {
+        if (e) { res.writeHead(200, headers); return res.end(buf); }
+        headers['Content-Encoding'] = 'gzip';
+        headers['Content-Length'] = z.length;
+        headers['Vary'] = 'Accept-Encoding';
+        res.writeHead(200, headers);
+        res.end(z);
+      });
+      return;
+    }
     res.writeHead(200, headers);
     res.end(buf);
   });

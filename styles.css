@@ -12,7 +12,7 @@ Responsive: Mobile-First (320px to 1920px+)
 --text-primary:#fff;--text-secondary:rgba(255,255,255,0.85);--text-muted:rgba(255,255,255,0.7);--text-on-accent:#fff;
 --shadow-accent:0 8px 40px rgba(227,0,27,0.25);
 --shadow-card:0 10px 30px rgba(0,0,0,0.5);
---font-display:'Bebas Neue',sans-serif;--font-body:'DM Sans',sans-serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code','Segoe UI Mono','Roboto Mono',Consolas,Menlo,monospace;
+--font-display:'Franklin Gothic Medium','Arial Narrow',Impact,'Helvetica Neue',Arial,sans-serif;--font-body:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code','Segoe UI Mono','Roboto Mono',Consolas,Menlo,monospace;
 --radius:8px;--radius-full:50px;--transition:0.3s cubic-bezier(0.4, 0, 0.2, 1);
 --space-xs:0.5rem;--space-sm:1rem;--space-md:2rem;--space-lg:4rem;--space-xl:8rem;
 --fs-xs:clamp(0.7rem, 0.6rem + 0.5vw, 0.8rem);--fs-sm:clamp(0.8rem, 0.7rem + 0.5vw, 0.9rem);--fs-base:clamp(0.9rem, 0.8rem + 0.5vw, 1rem);--fs-md:clamp(1.1rem, 1rem + 0.5vw, 1.3rem);--fs-lg:clamp(1.5rem, 1.2rem + 1vw, 2.2rem);--fs-xl:clamp(2rem, 1.5rem + 2vw, 4rem);--fs-display:clamp(2.5rem, 2rem + 4vw, 6rem);
@@ -1378,3 +1378,34 @@ backdrop-filter:blur(20px)
 .diag-empty{color:var(--text-muted);font-style:italic}
 .cached-badge{position:fixed;top:38px;left:50%;transform:translateX(-50%);z-index:var(--z-toast);background:var(--bg-raised);border:1px solid var(--accent-gold);color:var(--text-primary);padding:.4rem 1rem;border-radius:var(--radius);font-size:var(--fs-xs);box-shadow:0 8px 24px rgba(0,0,0,.4)}
 @media (max-width:640px){.cached-badge{top:32px;white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis}}
+
+/* ============ B2: gradient placeholders + intrinsic ratios ============ */
+/* Flat #1a1a1a placeholder upgraded to a subtle gradient (no image cost). */
+.card-poster,.top10-poster{background:linear-gradient(160deg,#222,#161616 55%,#1e1e1e)}
+/* Flexible-height posters reserve their box via aspect-ratio so lazy loading
+   cannot shift layout; each gets the same gradient placeholder. */
+.search-result-poster,.diary-entry-poster,.franchise-poster{aspect-ratio:2/3;object-fit:cover;background:linear-gradient(160deg,#222,#161616 55%,#1e1e1e)}
+.cast-photo{aspect-ratio:1/1;object-fit:cover;background:linear-gradient(160deg,#222,#161616)}
+.episode-still{aspect-ratio:16/9;object-fit:cover;background:linear-gradient(160deg,#222,#161616)}
+/* ============ C3: target size + contrast fixes (Lighthouse) ============ */
+/* Banner dots are 12px visually — expand the hit area to 24px+ (WCAG 2.5.8) */
+.banner-dot{position:relative}
+.banner-dot::after{content:"";position:absolute;inset:-6px;border-radius:50%}
+/* Depth badge labels: theme-aware, guaranteed >=4.5:1 on both themes */
+.depth-badge .depth-badge-label{color:var(--text-primary)}
+.depth-badge.locked .depth-badge-label{color:var(--text-secondary)}
+/* ============ C3 round 2: exact Lighthouse remediations ============ */
+/* banner-dot: 24x24 hit target with a 12px visual dot (::before) */
+.banner-dot{width:24px;height:24px;background:transparent;position:relative}
+.banner-dot::before{content:"";position:absolute;inset:6px;border-radius:50%;background:rgba(255,255,255,0.3);transition:background var(--transition)}
+.banner-dot:hover::before{background:rgba(255,255,255,0.6)}
+.banner-dot.active{background:transparent;box-shadow:none}
+.banner-dot.active::before{background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.banner-dot::after{display:none} /* supersede the earlier inset hack */
+/* locked badges: keep the muted look WITHOUT failing 4.5:1 — grayscale +
+   dashed border instead of 35% opacity washout */
+.depth-badge.locked{opacity:1;border-style:dashed}
+/* B2/B1: the blur-up placeholder blurred a FLAT color — zero visual value,
+   real composite cost on low-end phones. Removed; gradient placeholder now
+   shows directly, .loaded becomes a visual no-op. */
+.card-poster,.top10-poster{filter:none}
