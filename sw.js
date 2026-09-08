@@ -15,8 +15,8 @@
 // prefetch that discarded its own response. The dynamic cache is trimmed on
 // activate so it can no longer grow without bound.
 
-const CACHE = 'void-shell-v14'; // v14: production hardening release (reliability/perf/a11y/security)
-const DYNAMIC_CACHE = 'void-dynamic-v12';
+const CACHE = 'void-shell-v15'; // v15: batched home feed (single proxy round trip)
+const DYNAMIC_CACHE = 'void-dynamic-v13';
 
 // F-01: relative URLs resolve against the SW's own directory, so this works
 // at the domain root AND from subpath deployments.

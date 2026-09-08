@@ -485,6 +485,29 @@ throw new Error(`TMDB API error ${r.status} (${endpoint})`);
 }
 async function tmdbList(endpoint) { const d = await tmdb(endpoint); return d.results || []; }
 
+// Perf: whole-feed batch fetch — ONE proxy round trip for the home rows.
+// Returns a map of endpoint -> parsed TMDB data (status 200 entries only),
+// or null when the batch transport itself failed (caller falls back to the
+// per-row path). Uses the same shared transport + cached-data badge as tmdb().
+async function tmdbBatch(endpoints) {
+beginFetch();
+try {
+const r = await fetchRetry(`/.netlify/functions/tmdb?paths=${encodeURIComponent(endpoints.join(','))}`);
+const d = await r.json().catch(() => null);
+if (r.ok && d && d.batch && d.results && typeof d.results === 'object') {
+if (r.headers.get('X-Void-Cache') === 'stale') markCachedData(); else markFreshData();
+const map = {};
+for (const p of Object.keys(d.results)) {
+const entry = d.results[p];
+if (entry && entry.status === 200 && entry.data && typeof entry.data === 'object' && !entry.data.error) map[p] = entry.data;
+}
+return map;
+}
+return null;
+} catch (e) { return null; }
+finally { endFetch(); }
+}
+
 // ============ AI CONCIERGE (P1: proxied; server runs z-ai-web-dev-sdk) ============
 // Two call shapes share one transport:
 //   callAIAction({ action: 'discover'|'pitch', ... }) → full server JSON
@@ -1307,22 +1330,32 @@ renderContentRow('recommendations', unique.slice(0, 20));
 
 async function loadContent() {
 ['trendingMovies', 'popularTV', 'topRated', 'nowPlaying', 'hiddenGems'].forEach(id => renderSkeletons(id, 10));
-// P-02: now_playing used to be fetched twice per home load (once for the row,
-// once more for New This Week). One promise now feeds both.
-const nowPlayingPromise = tmdbList('/movie/now_playing');
 // C2: kids home feed — PG/TV-PG discover sources; non-certifiable rows stay hidden.
 const kidsMode = !!(getCurrentProfile() && getCurrentProfile().kids);
 const KIDS_MOVIE = '/discover/movie?certification_country=US&certification.lte=PG&include_adult=false&sort_by=popularity.desc&vote_count.gte=50';
 const KIDS_TV = '/discover/tv?certification_country=US&certification.lte=TV-PG&include_adult=false&sort_by=popularity.desc&vote_count.gte=20';
+const HIDDEN_GEMS = '/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc';
+const NOW_PLAYING = '/movie/now_playing';
+const TOP10 = '/trending/all/week';
+const row = (id, items, type) => renderContentRow(id, (items || []).map(m => ({ ...m, media_type: m.media_type || type })), false);
 const load = async (id, source, type) => {
 try {
 const items = await (typeof source === 'string' ? tmdbList(source) : source);
 renderContentRow(id, items.map(m => ({ ...m, media_type: m.media_type || type })), false);
 } catch (e) {
-renderSectionError(id, () => load(id, typeof source === 'string' ? source : tmdbList('/movie/now_playing'), type), e && e.message);
+renderSectionError(id, () => load(id, typeof source === 'string' ? source : tmdbList(NOW_PLAYING), type), e && e.message);
 }
 };
 if (kidsMode) {
+// Perf: kids feed in ONE batched proxy round trip; per-row fallback below if
+// the batch transport itself fails.
+const kbatch = await tmdbBatch([KIDS_MOVIE, KIDS_TV]);
+if (kbatch) {
+row('trendingMovies', (kbatch[KIDS_MOVIE] || {}).results, 'movie');
+row('popularTV', (kbatch[KIDS_TV] || {}).results, 'tv');
+announce('Home feed loaded');
+return;
+}
 // Kids: only certification-filtered sources load; the rest of the rows stay
 // hidden via applyKidsMode().
 await Promise.all([
@@ -1332,15 +1365,43 @@ load('popularTV', KIDS_TV, 'tv'),
 announce('Home feed loaded');
 return;
 }
+// Perf: the home feed used to be 6 proxy round trips — 5 parallel rows, then
+// trending/all AFTER they resolved (Top 10 + trending-in-your-genres waited a
+// full second wave). One batched call lands every source in a single response.
+const SOURCES = [
+['trendingMovies', '/trending/movie/week', 'movie'],
+['popularTV', '/trending/tv/week', 'tv'],
+['topRated', '/movie/top_rated', 'movie'],
+['hiddenGems', HIDDEN_GEMS, 'movie'],
+];
+const batch = await tmdbBatch([...SOURCES.map(s => s[1]), NOW_PLAYING, TOP10]);
+if (batch) {
+for (const [id, src, type] of SOURCES) {
+if (batch[src]) row(id, batch[src].results, type);
+else renderSectionError(id, () => load(id, src, type), 'Source unavailable');
+}
+const np = batch[NOW_PLAYING] || null;
+if (np) row('nowPlaying', np.results, 'movie');
+else renderSectionError('nowPlaying', () => load('nowPlaying', tmdbList(NOW_PLAYING), 'movie'), 'Source unavailable');
+// B6: one trending payload feeds BOTH the Top 10 row and trending-in-your-genres
+const trendingAll = (batch[TOP10] || {}).results || [];
+renderTop10(trendingAll);
+renderTrendingInYourGenres(trendingAll);
+loadNewThisWeek(np ? (np.results || []) : null);
+announce('Home feed loaded');
+return;
+}
+// Fallback (batch transport failed): per-row parallel loads — original path.
+const nowPlayingPromise = tmdbList(NOW_PLAYING);
 await Promise.all([
 load('trendingMovies', '/trending/movie/week', 'movie'),
 load('popularTV', '/trending/tv/week', 'tv'),
 load('topRated', '/movie/top_rated', 'movie'),
 load('nowPlaying', nowPlayingPromise, 'movie'),
-load('hiddenGems', '/discover/movie?vote_average.gte=7.5&vote_count.lte=500&vote_count.gte=50&sort_by=vote_average.desc', 'movie'),
+load('hiddenGems', HIDDEN_GEMS, 'movie'),
 ]);
 // B6: one trending payload feeds BOTH the Top 10 row and trending-in-your-genres
-const trendingAll = await tmdbList('/trending/all/week').catch(() => []);
+const trendingAll = await tmdbList(TOP10).catch(() => []);
 renderTop10(trendingAll);
 renderTrendingInYourGenres(trendingAll);
 loadNewThisWeek(await nowPlayingPromise.catch(() => null));

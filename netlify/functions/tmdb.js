@@ -26,6 +26,22 @@ const CACHE_MAX = 250;
 const hits = new Map();  // ip -> [timestamps within window] (per-instance)
 const cache = new Map(); // cleanPath -> { status, body, at } (per-instance)
 
+// Perf: batch mode. The home feed used to issue 6 sequential-ish proxy calls
+// (5 rows, then trending/all for Top 10 after they resolved) — each a full
+// function round trip, so time-to-content stacked one RTT on another. One
+// batched call fetches every source upstream in parallel and lands the whole
+// feed in a single response. Security posture is unchanged: every path in a
+// batch passes the same allowlist/length checks, the key never leaves the
+// server, and each path still consumes exactly one rate-limit unit (honest
+// accounting — the upstream TMDB load is identical).
+const MAX_BATCH = 8;
+
+function cleanOnePath(raw) {
+  if (typeof raw !== 'string' || !raw || raw.length > MAX_PATH_LEN || !ALLOWED_PATH.test(raw)) return null;
+  // Never let a caller smuggle its own key/credentials into the upstream URL.
+  return raw.replace(/([?&])api_key=[^&]*/g, '$1').replace(/[?&]$/, '');
+}
+
 function clientIp(event) {
   const h = (event && event.headers) || {};
   const ip = h['x-nf-client-connection-ip'] || h['client-ip'] ||
@@ -52,7 +68,62 @@ const json = (statusCode, body, extraHeaders) => ({
 exports.handler = async (event) => {
   if (event.httpMethod !== 'GET') return json(405, { error: 'Method Not Allowed' });
 
-  const path = (event.queryStringParameters && event.queryStringParameters.path) || '';
+  const q = event.queryStringParameters || {};
+
+  // ---- Batch mode: ?paths=/trending/movie/week,/trending/tv/week,... ----
+  if (q.paths !== undefined) {
+    const ipB = clientIp(event);
+    const rawPaths = q.paths.split(',').map(s => s.trim()).filter(Boolean);
+    if (!rawPaths.length) return json(400, { error: 'Missing paths' });
+    if (rawPaths.length > MAX_BATCH) return json(400, { error: `Too many paths — max ${MAX_BATCH}` });
+
+    // Validate every path BEFORE spending any rate-limit units, so one bad
+    // path can't burn the caller's window for nothing.
+    const cleaned = rawPaths.map(cleanOnePath);
+    if (cleaned.some(p => p === null)) return json(403, { error: 'Endpoint not allowed' });
+
+    // Honest accounting: one unit per path (same upstream load as separate calls).
+    for (let i = 0; i < cleaned.length; i++) {
+      if (rateLimited(ipB)) {
+        return json(429, { error: 'Too many requests — try again in a minute.' }, { 'Retry-After': '60' });
+      }
+    }
+
+    const keyB = process.env.TMDB_API_KEY;
+    if (!keyB) return json(500, { error: 'TMDB_API_KEY not set' });
+
+    // Unique paths only — dedup saves upstream calls, identical data returned.
+    const unique = [...new Set(cleaned)];
+    const results = {};
+
+    await Promise.all(unique.map(async (cleanPath) => {
+      const cached = cache.get(cleanPath);
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+        results[cleanPath] = { status: cached.status, data: JSON.parse(cached.body) };
+        return;
+      }
+      const sep = cleanPath.includes('?') ? '&' : '?';
+      try {
+        const res = await fetch(`https://api.themoviedb.org/3${cleanPath}${sep}api_key=${keyB}`);
+        const data = await res.json().catch(() => ({}));
+        results[cleanPath] = { status: res.status, data };
+        if (res.ok) {
+          cache.set(cleanPath, { status: res.status, body: JSON.stringify(data), at: Date.now() });
+          if (cache.size > CACHE_MAX) {
+            const oldest = cache.keys().next().value;
+            cache.delete(oldest);
+          }
+        }
+      } catch (e) {
+        results[cleanPath] = { status: 502, data: { error: e.message } };
+      }
+    }));
+
+    return json(200, { batch: true, results });
+  }
+
+  // ---- Single mode (unchanged): ?path=/movie/123 ----
+  const path = q.path || '';
   if (!path) return json(400, { error: 'Missing path' });
   if (path.length > MAX_PATH_LEN || !ALLOWED_PATH.test(path)) {
     return json(403, { error: 'Endpoint not allowed' });
@@ -66,8 +137,8 @@ exports.handler = async (event) => {
   const key = process.env.TMDB_API_KEY;
   if (!key) return json(500, { error: 'TMDB_API_KEY not set' });
 
-  // Never let a caller smuggle its own key/credentials into the upstream URL.
-  const cleanPath = path.replace(/([?&])api_key=[^&]*/g, '$1').replace(/[?&]$/, '');
+  const cleanPath = cleanOnePath(path) || '';
+  if (!cleanPath) return json(403, { error: 'Endpoint not allowed' });
 
   const cached = cache.get(cleanPath);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
